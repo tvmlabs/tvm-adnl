@@ -1,54 +1,58 @@
-/*
-* Copyright (C) 2019-2023 EverX. All Rights Reserved.
-*
-* Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
-* this file except in compliance with the License.
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific TON DEV software governing permissions and
-* limitations under the License.
-*/
+// Copyright (C) 2019-2023 EverX. All Rights Reserved.
+//
+// Licensed under the SOFTWARE EVALUATION License (the "License"); you may not
+// use this file except in compliance with the License.
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific TON DEV software governing permissions and
+// limitations under the License.
+
+use core::ops::Range;
+#[cfg(any(feature = "client", feature = "node", feature = "server"))]
+use std::convert::TryInto;
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use aes_ctr::cipher::NewStreamCipher;
 use aes_ctr::cipher::SyncStreamCipher;
-use core::ops::Range;
 use rand::Rng;
-#[cfg(any(feature = "client", feature = "node", feature = "server"))]
-use std::convert::TryInto;
-use std::{
-    fmt::Debug,
-    hash::Hash,
-    sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-        Arc,
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tvm_api::deserialize_boxed_bundle;
+use tvm_api::serialize_boxed;
+use tvm_api::serialize_boxed_append;
+use tvm_api::ton::adnl::message::message::Answer as AdnlAnswerMessage;
+use tvm_api::ton::adnl::message::message::Custom as AdnlCustomMessage;
+use tvm_api::ton::adnl::message::message::Query as AdnlQueryMessage;
+use tvm_api::ton::adnl::pong::Pong as AdnlPong;
+use tvm_api::ton::adnl::Message as AdnlMessage;
+use tvm_api::ton::rldp::message::Answer as RldpAnswer;
+use tvm_api::ton::rldp::message::Query as RldpQuery;
+use tvm_api::ton::rpc::adnl::Ping as AdnlPing;
+use tvm_api::ton::TLObject;
+use tvm_api::AnyBoxedSerialize;
+use tvm_api::BoxedSerialize;
 #[cfg(feature = "telemetry")]
 use tvm_api::ConstructorNumber;
-use tvm_api::{
-    deserialize_boxed_bundle, serialize_boxed, serialize_boxed_append,
-    ton::{
-        adnl::{
-            message::message::{
-                Answer as AdnlAnswerMessage, Custom as AdnlCustomMessage, Query as AdnlQueryMessage,
-            },
-            pong::Pong as AdnlPong,
-            Message as AdnlMessage,
-        },
-        rldp::message::{Answer as RldpAnswer, Query as RldpQuery},
-        rpc::adnl::Ping as AdnlPing,
-        TLObject,
-    },
-    AnyBoxedSerialize, BoxedSerialize, IntoBoxed,
-};
+use tvm_api::IntoBoxed;
 use tvm_types::fail;
+use tvm_types::sha256_digest;
+use tvm_types::sha256_digest_slices;
+use tvm_types::KeyId;
 #[cfg(any(feature = "client", feature = "server", feature = "node"))]
 use tvm_types::KeyOption;
-use tvm_types::{sha256_digest, sha256_digest_slices, KeyId, Result, UInt256};
+use tvm_types::Result;
+use tvm_types::UInt256;
 
 #[cfg(any(feature = "node", feature = "server"))]
 pub(crate) const TARGET: &str = "adnl";
@@ -189,12 +193,8 @@ impl AdnlCryptoUtils {
         };
         let idx = if let Some(version) = version {
             // Mix version with other bytes of header to get encoded version
-            let mut xor = [
-                (version >> 8) as u8,
-                version as u8,
-                (version >> 8) as u8,
-                version as u8,
-            ];
+            let mut xor =
+                [(version >> 8) as u8, version as u8, (version >> 8) as u8, version as u8];
             for i in 0..idx {
                 xor[i & 0x03] ^= buf[i];
             }
@@ -285,11 +285,7 @@ impl AdnlHandshake {
         }
         for key in keys.iter() {
             if key.val().id().data().eq(&buf[0..32]) {
-                let mut range = if let Some(len) = len {
-                    96..96 + len
-                } else {
-                    96..buf.len()
-                };
+                let mut range = if let Some(len) = len { 96..96 + len } else { 96..buf.len() };
                 if accept_versioning && (buf.len() >= 100) {
                     if let Some(version) = AdnlCryptoUtils::decode_version(
                         &buf[64..68].try_into()?,
@@ -320,22 +316,20 @@ impl AdnlHandshake {
         shared_secret: &mut [u8; 32],
         checksum: &[u8; 32],
     ) -> aes_ctr::Aes256Ctr {
-        /*
-        let x = shared_secret;
-        let y = checksum;
-        //let mut aes_key_bytes = from_slice!(x, 0, 16, y, 16, 16);
-        let mut aes_key_bytes = [
-        x[ 0], x[ 1], x[ 2], x[ 3], x[ 4], x[ 5], x[ 6], x[ 7],
-        x[ 8], x[ 9], x[10], x[11], x[12], x[13], x[14], x[15],
-        y[16], y[17], y[18], y[19], y[20], y[21], y[22], y[23],
-        y[24], y[25], y[26], y[27], y[28], y[29], y[30], y[31]
-        ];
-        //let mut aes_ctr_bytes = from_slice!(y, 0,  4, x, 20, 12);
-        let mut aes_ctr_bytes = [
-        y[ 0], y[ 1], y[ 2], y[ 3], x[20], x[21], x[22], x[23],
-        x[24], x[25], x[26], x[27], x[28], x[29], x[30], x[31]
-        ];
-        */
+        // let x = shared_secret;
+        // let y = checksum;
+        // let mut aes_key_bytes = from_slice!(x, 0, 16, y, 16, 16);
+        // let mut aes_key_bytes = [
+        // x[ 0], x[ 1], x[ 2], x[ 3], x[ 4], x[ 5], x[ 6], x[ 7],
+        // x[ 8], x[ 9], x[10], x[11], x[12], x[13], x[14], x[15],
+        // y[16], y[17], y[18], y[19], y[20], y[21], y[22], y[23],
+        // y[24], y[25], y[26], y[27], y[28], y[29], y[30], y[31]
+        // ];
+        // let mut aes_ctr_bytes = from_slice!(y, 0,  4, x, 20, 12);
+        // let mut aes_ctr_bytes = [
+        // y[ 0], y[ 1], y[ 2], y[ 3], x[20], x[21], x[22], x[23],
+        // x[24], x[25], x[26], x[27], x[28], x[29], x[30], x[31]
+        // ];
         let ret = AdnlCryptoUtils::build_cipher_secure(shared_secret, checksum);
         shared_secret.iter_mut().for_each(|a| *a = 0);
         ret
@@ -399,6 +393,7 @@ impl AdnlStream {
         stream.set_read_timeout(Some(timeouts.read()));
         Self(stream)
     }
+
     /// Read from stream
     pub async fn read(&mut self, buf: &mut Vec<u8>, len: usize) -> Result<()> {
         buf.resize(len, 0);
@@ -406,12 +401,14 @@ impl AdnlStream {
         stream.get_mut().read_exact(&mut buf[..]).await?;
         Ok(())
     }
+
     /// Shutdown stream
     pub async fn shutdown(&mut self) -> Result<()> {
         let Self(stream) = self;
         stream.get_mut().shutdown().await?;
         Ok(())
     }
+
     /// Write to stream
     pub async fn write(&mut self, buf: &mut Vec<u8>) -> Result<()> {
         let Self(stream) = self;
@@ -431,7 +428,7 @@ impl AdnlStreamCrypto {
     /// Construct as client
     #[cfg(feature = "client")]
     pub fn with_nonce_as_client(nonce: &[u8; 160]) -> Self {
-        /* Do not clear nonce because it will be encrypted inplace afterwards */
+        // Do not clear nonce because it will be encrypted inplace afterwards
         Self {
             cipher_recv: AdnlCryptoUtils::build_cipher_unsecure(nonce, 0..32, 64..80),
             cipher_send: AdnlCryptoUtils::build_cipher_unsecure(nonce, 32..64, 80..96),
@@ -441,7 +438,7 @@ impl AdnlStreamCrypto {
     /// Construct as server
     #[cfg(feature = "server")]
     pub fn with_nonce_as_server(nonce: &mut [u8; 160]) -> Self {
-        /* Clear nonce */
+        // Clear nonce
         let ret = Self {
             cipher_recv: AdnlCryptoUtils::build_cipher_unsecure(nonce, 32..64, 80..96),
             cipher_send: AdnlCryptoUtils::build_cipher_unsecure(nonce, 0..32, 64..80),
@@ -597,13 +594,13 @@ impl Query {
         query: &AdnlQueryMessage,
         peers: &AdnlPeers,
     ) -> Result<Option<QueryAdnlAnswer>> {
-        let ret = Self::process(subscribers, &query.query[..], peers)
-            .await?
-            .map(|answer| QueryAdnlAnswer {
+        let ret = Self::process(subscribers, &query.query[..], peers).await?.map(|answer| {
+            QueryAdnlAnswer {
                 answer,
                 convert: Self::convert_to_adnl_answer,
                 query_id: query.query_id.clone(),
-            });
+            }
+        });
         Ok(ret)
     }
 
@@ -627,23 +624,19 @@ impl Query {
         query: &RldpQuery,
         peers: &AdnlPeers,
     ) -> Result<Option<QueryRldpAnswer>> {
-        let ret = Self::process(subscribers, &query.data[..], peers)
-            .await?
-            .map(|answer| QueryRldpAnswer {
+        let ret = Self::process(subscribers, &query.data[..], peers).await?.map(|answer| {
+            QueryRldpAnswer {
                 answer,
                 convert: Self::convert_to_rldp_answer,
                 query_id: query.query_id.clone(),
-            });
+            }
+        });
         Ok(ret)
     }
 
     fn convert_to_adnl_answer(data: TaggedByteVec, query_id: UInt256) -> TaggedAdnlMessage {
         TaggedAdnlMessage {
-            object: AdnlAnswerMessage {
-                query_id,
-                answer: data.object.into(),
-            }
-            .into_boxed(),
+            object: AdnlAnswerMessage { query_id, answer: data.object.into() }.into_boxed(),
             #[cfg(feature = "telemetry")]
             tag: data.tag,
         }
@@ -651,10 +644,7 @@ impl Query {
 
     fn convert_to_rldp_answer(data: TaggedByteVec, query_id: UInt256) -> TaggedRldpAnswer {
         TaggedRldpAnswer {
-            object: RldpAnswer {
-                query_id,
-                data: data.object.into(),
-            },
+            object: RldpAnswer { query_id, data: data.object.into() },
             #[cfg(feature = "telemetry")]
             tag: data.tag,
         }
@@ -793,9 +783,7 @@ impl QueryResult {
             #[cfg(feature = "telemetry")]
             tag,
         };
-        Ok(QueryResult::Consumed(QueryAnswer::Ready(Some(
-            Answer::Object(ret),
-        ))))
+        Ok(QueryResult::Consumed(QueryAnswer::Ready(Some(Answer::Object(ret)))))
     }
 }
 
@@ -844,10 +832,12 @@ pub struct Timeouts {
 
 impl Timeouts {
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
+
     /// Read timeout
     pub fn read(&self) -> Duration {
         self.read
     }
+
     /// Write timeout
     pub fn write(&self) -> Duration {
         self.write
@@ -856,10 +846,7 @@ impl Timeouts {
 
 impl Default for Timeouts {
     fn default() -> Self {
-        Self {
-            read: Self::DEFAULT_TIMEOUT,
-            write: Self::DEFAULT_TIMEOUT,
-        }
+        Self { read: Self::DEFAULT_TIMEOUT, write: Self::DEFAULT_TIMEOUT }
     }
 }
 
@@ -868,10 +855,7 @@ pub struct Version;
 
 impl Version {
     pub fn get() -> i32 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i32
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i32
     }
 }
 
@@ -884,15 +868,13 @@ pub struct UpdatedAt {
 #[allow(clippy::new_without_default)]
 impl UpdatedAt {
     pub fn new() -> Self {
-        Self {
-            started: Instant::now(),
-            updated: AtomicU64::new(0),
-        }
+        Self { started: Instant::now(), updated: AtomicU64::new(0) }
     }
+
     pub fn refresh(&self) {
-        self.updated
-            .store(self.started.elapsed().as_secs(), Ordering::Relaxed)
+        self.updated.store(self.started.elapsed().as_secs(), Ordering::Relaxed)
     }
+
     pub fn is_expired(&self, timeout: u64) -> bool {
         self.started.elapsed().as_secs() - self.updated.load(Ordering::Relaxed) >= timeout
     }
@@ -906,10 +888,7 @@ pub struct Wait<T> {
 impl<T> Wait<T> {
     pub fn new() -> (Arc<Self>, tokio::sync::mpsc::UnboundedReceiver<Option<T>>) {
         let (queue_sender, queue_reader) = tokio::sync::mpsc::unbounded_channel();
-        let ret = Self {
-            count: AtomicUsize::new(0),
-            queue_sender,
-        };
+        let ret = Self { count: AtomicUsize::new(0), queue_sender };
         (Arc::new(ret), queue_reader)
     }
 
@@ -982,11 +961,7 @@ pub fn add_unbound_object_to_map<K: Hash + Ord, V>(
     mut factory: impl FnMut() -> Result<V>,
 ) -> Result<bool> {
     add_unbound_object_to_map_with_update(to, key, |found| {
-        if found.is_some() {
-            Ok(None)
-        } else {
-            Ok(Some(factory()?))
-        }
+        if found.is_some() { Ok(None) } else { Ok(Some(factory()?)) }
     })
 }
 

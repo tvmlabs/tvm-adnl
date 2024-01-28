@@ -1,35 +1,44 @@
-/*
-* Copyright (C) 2019-2023 EverX. All Rights Reserved.
-*
-* Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
-* this file except in compliance with the License.
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific TON DEV software governing permissions and
-* limitations under the License.
-*/
+// Copyright (C) 2019-2023 EverX. All Rights Reserved.
+//
+// Licensed under the SOFTWARE EVALUATION License (the "License"); you may not
+// use this file except in compliance with the License.
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific TON DEV software governing permissions and
+// limitations under the License.
 
-use crate::common::{AdnlHandshake, AdnlStream, AdnlStreamCrypto, Query, TaggedTlObject, Timeouts};
+use std::convert::TryInto;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+use std::time::SystemTime;
+
 use rand::Rng;
-use std::{
-    convert::TryInto,
-    net::SocketAddr,
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
-use ton_api::{
-    deserialize_boxed, deserialize_typed, serialize_boxed,
-    ton::{
-        adnl::{Message as AdnlMessage, Pong as AdnlPongBoxed},
-        rpc::adnl::Ping as AdnlPing,
-        TLObject,
-    },
-};
+use ton_api::deserialize_boxed;
+use ton_api::deserialize_typed;
+use ton_api::serialize_boxed;
+use ton_api::ton::adnl::Message as AdnlMessage;
+use ton_api::ton::adnl::Pong as AdnlPongBoxed;
+use ton_api::ton::rpc::adnl::Ping as AdnlPing;
+use ton_api::ton::TLObject;
 #[cfg(feature = "telemetry")]
-use ton_api::{BoxedSerialize, ConstructorNumber};
-use ton_types::{fail, Ed25519KeyOption, KeyOption, KeyOptionJson, Result};
+use ton_api::BoxedSerialize;
+#[cfg(feature = "telemetry")]
+use ton_api::ConstructorNumber;
+use ton_types::fail;
+use ton_types::Ed25519KeyOption;
+use ton_types::KeyOption;
+use ton_types::KeyOptionJson;
+use ton_types::Result;
+
+use crate::common::AdnlHandshake;
+use crate::common::AdnlStream;
+use crate::common::AdnlStreamCrypto;
+use crate::common::Query;
+use crate::common::TaggedTlObject;
+use crate::common::Timeouts;
 
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct AdnlClientConfigJson {
@@ -122,17 +131,14 @@ impl AdnlClient {
         )?;
         socket.set_reuse_address(true)?;
         socket.set_linger(Some(Duration::from_secs(0)))?;
-        //socket.bind(&"0.0.0.0:0".parse::<SocketAddr>()?.into())?;
+        // socket.bind(&"0.0.0.0:0".parse::<SocketAddr>()?.into())?;
         socket.connect_timeout(&config.server_address.into(), config.timeouts.write())?;
 
         let mut stream = AdnlStream::from_stream_with_timeouts(
             tokio::net::TcpStream::from_std(socket.into_tcp_stream())?,
             config.timeouts(),
         );
-        Ok(Self {
-            crypto: Self::send_init_packet(&mut stream, config).await?,
-            stream,
-        })
+        Ok(Self { crypto: Self::send_init_packet(&mut stream, config).await?, stream })
     }
 
     /// Ping server
@@ -179,11 +185,7 @@ impl AdnlClient {
                     fail!("Query ID mismatch {:?} vs {:?}", query.object, answer)
                 }
             }
-            answer => fail!(
-                "Unexpected answer to query {:?}: {:?}",
-                query.object,
-                answer
-            ),
+            answer => fail!("Unexpected answer to query {:?}: {:?}", query.object, answer),
         }
     }
 

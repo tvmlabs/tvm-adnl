@@ -1,30 +1,43 @@
-/*
-* Copyright (C) 2019-2023 EverX. All Rights Reserved.
-*
-* Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
-* this file except in compliance with the License.
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific TON DEV software governing permissions and
-* limitations under the License.
-*/
+// Copyright (C) 2019-2023 EverX. All Rights Reserved.
+//
+// Licensed under the SOFTWARE EVALUATION License (the "License"); you may not
+// use this file except in compliance with the License.
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific TON DEV software governing permissions and
+// limitations under the License.
 
-use crate::{
-    common::{
-        AdnlHandshake, AdnlPeers, AdnlPingSubscriber, AdnlStream, AdnlStreamCrypto, Query,
-        Subscriber, Timeouts, TARGET,
-    },
-    dump,
-};
+use std::convert::TryInto;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+
 use futures::prelude::*;
-use std::{convert::TryInto, net::SocketAddr, sync::Arc, time::Duration};
 use stream_cancel::StreamExt;
-use ton_api::{deserialize_boxed, serialize_boxed_inplace, ton::adnl::Message as AdnlMessage};
-use ton_types::{
-    base64_encode, error, fail, Ed25519KeyOption, KeyId, KeyOption, KeyOptionJson, Result,
-};
+use ton_api::deserialize_boxed;
+use ton_api::serialize_boxed_inplace;
+use ton_api::ton::adnl::Message as AdnlMessage;
+use ton_types::base64_encode;
+use ton_types::error;
+use ton_types::fail;
+use ton_types::Ed25519KeyOption;
+use ton_types::KeyId;
+use ton_types::KeyOption;
+use ton_types::KeyOptionJson;
+use ton_types::Result;
+
+use crate::common::AdnlHandshake;
+use crate::common::AdnlPeers;
+use crate::common::AdnlPingSubscriber;
+use crate::common::AdnlStream;
+use crate::common::AdnlStreamCrypto;
+use crate::common::Query;
+use crate::common::Subscriber;
+use crate::common::Timeouts;
+use crate::common::TARGET;
+use crate::dump;
 
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -87,10 +100,7 @@ impl AdnlServerConfig {
                     let key = Ed25519KeyOption::from_public_key_json(key)?;
                     let key = key.pub_key()?;
                     if clients.insert(key.try_into()?, 0).is_some() {
-                        fail!(
-                            "Duplicated client key {} in server config",
-                            base64_encode(key)
-                        )
+                        fail!("Duplicated client key {} in server config", base64_encode(key))
                     }
                 }
                 Some(clients)
@@ -156,10 +166,7 @@ impl AdnlServerThread {
                 fail!("ADNL init message is too short ({})", buf.len())
             }
             if !clients.iter().any(|client| &buf[32..64] == client.key()) {
-                fail!(
-                    "Message from unknown client {}",
-                    base64_encode(&buf[32..64])
-                )
+                fail!("Message from unknown client {}", base64_encode(&buf[32..64]))
             }
         }
         let (mut crypto, peers) = Self::parse_init_packet(&key, &mut buf)?;
@@ -215,7 +222,9 @@ impl AdnlServerThread {
 pub struct AdnlServer(stream_cancel::Trigger);
 
 impl AdnlServer {
-    const TIMEOUT_SHUTDOWN: u64 = 100; // Milliseconds
+    const TIMEOUT_SHUTDOWN: u64 = 100;
+
+    // Milliseconds
 
     /// Listen to connections
     pub async fn listen(
@@ -223,18 +232,17 @@ impl AdnlServer {
         mut subscribers: Vec<Arc<dyn Subscriber>>,
     ) -> Result<Self> {
         let (trigger, tripwire) = stream_cancel::Tripwire::new();
-        /*
-                let socket = socket2::Socket::new(
-                    socket2::Domain::ipv4(),
-                    socket2::Type::stream(),
-                    Some(socket2::Protocol::tcp())
-                )?;
-                socket.set_reuse_address(true)?;
-                socket.set_linger(Some(Duration::from_secs(0)))?;
-                let addr: socket2::SockAddr = config.address.clone().into();
-                socket.bind(&addr)?;
-                let mut listener = tokio::net::TcpListener::from_std(socket.into_tcp_listener())?;
-        */
+        // let socket = socket2::Socket::new(
+        // socket2::Domain::ipv4(),
+        // socket2::Type::stream(),
+        // Some(socket2::Protocol::tcp())
+        // )?;
+        // socket.set_reuse_address(true)?;
+        // socket.set_linger(Some(Duration::from_secs(0)))?;
+        // let addr: socket2::SockAddr = config.address.clone().into();
+        // socket.bind(&addr)?;
+        // let mut listener =
+        // tokio::net::TcpListener::from_std(socket.into_tcp_listener())?;
         subscribers.push(Arc::new(AdnlPingSubscriber));
         let subscribers = Arc::new(subscribers);
         let listener = tokio::net::TcpListener::bind(config.address).await?;

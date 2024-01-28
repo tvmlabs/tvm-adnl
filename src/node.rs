@@ -1,79 +1,118 @@
-/*
-* Copyright (C) 2019-2023 EverX. All Rights Reserved.
-*
-* Licensed under the SOFTWARE EVALUATION License (the "License"); you may not use
-* this file except in compliance with the License.
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific TON DEV software governing permissions and
-* limitations under the License.
-*/
+// Copyright (C) 2019-2023 EverX. All Rights Reserved.
+//
+// Licensed under the SOFTWARE EVALUATION License (the "License"); you may not
+// use this file except in compliance with the License.
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific TON DEV software governing permissions and
+// limitations under the License.
 
+use std::cmp::max;
+use std::cmp::min;
+use std::cmp::Ordering;
+use std::collections::VecDeque;
+use std::convert::TryInto;
+use std::fmt::Debug;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::fmt::{self};
 #[cfg(feature = "dump")]
-use crate::dump;
-#[cfg(feature = "telemetry")]
-use crate::telemetry::{Metric, MetricBuilder, TelemetryItem, TelemetryPrinter};
-use crate::{
-    common::{
-        add_counted_object_to_map, add_counted_object_to_map_with_update,
-        add_unbound_object_to_map, add_unbound_object_to_map_with_update, hash, AdnlCryptoUtils,
-        AdnlHandshake, AdnlPeers, AdnlPingSubscriber, CountedObject, Counter, Query,
-        QueryAdnlAnswer, QueryCache, QueryId, Subscriber, TaggedAdnlMessage, TaggedByteSlice,
-        TaggedTlObject, UpdatedAt, Version, TARGET,
-    },
-    declare_counted,
-};
+use std::fs::create_dir_all;
+#[cfg(feature = "dump")]
+use std::fs::rename;
+#[cfg(feature = "dump")]
+use std::fs::OpenOptions;
+use std::io::Cursor;
+use std::io::ErrorKind;
+#[cfg(feature = "dump")]
+use std::io::Write;
+use std::net::IpAddr;
+use std::net::Ipv4Addr;
+use std::net::SocketAddr;
+#[cfg(feature = "dump")]
+use std::path::PathBuf;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{self};
+use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 
 use aes_ctr::cipher::stream::SyncStreamCipher;
 use rand::Rng;
-use std::{
-    cmp::{max, min, Ordering},
-    collections::VecDeque,
-    convert::TryInto,
-    fmt::{self, Debug, Display, Formatter},
-    io::{Cursor, ErrorKind},
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{
-        atomic::{self, AtomicI32, AtomicU32, AtomicU64, AtomicUsize},
-        Arc, Condvar, Mutex,
-    },
-    thread,
-    time::{Duration, Instant},
-};
-#[cfg(feature = "dump")]
-use std::{
-    fs::{create_dir_all, rename, OpenOptions},
-    io::Write,
-    path::PathBuf,
-};
+use ton_api::deserialize_boxed;
+use ton_api::deserialize_typed;
+use ton_api::serialize_boxed;
 #[cfg(feature = "telemetry")]
 use ton_api::tag_from_data;
-use ton_api::{
-    deserialize_boxed, deserialize_typed, serialize_boxed,
-    ton::{
-        self,
-        adnl::{
-            address::address::Udp,
-            addresslist::AddressList,
-            id::short::Short as AdnlIdShort,
-            message::message::{
-                Answer as AdnlAnswerMessage, ConfirmChannel, CreateChannel,
-                Custom as AdnlCustomMessage, Part as AdnlPartMessage, Query as AdnlQueryMessage,
-            },
-            packetcontents::PacketContents as AdnlPacketContents,
-            Address, Message as AdnlMessage, PacketContents as AdnlPacketContentsBoxed,
-        },
-        pub_::publickey::Aes as AesKey,
-        TLObject,
-    },
-    IntoBoxed,
-};
-use ton_types::{
-    base64_encode, error, fail, sha256_digest, Ed25519KeyOption, KeyId, KeyOption, KeyOptionJson,
-    Result, UInt256,
-};
+use ton_api::ton::adnl::address::address::Udp;
+use ton_api::ton::adnl::addresslist::AddressList;
+use ton_api::ton::adnl::id::short::Short as AdnlIdShort;
+use ton_api::ton::adnl::message::message::Answer as AdnlAnswerMessage;
+use ton_api::ton::adnl::message::message::ConfirmChannel;
+use ton_api::ton::adnl::message::message::CreateChannel;
+use ton_api::ton::adnl::message::message::Custom as AdnlCustomMessage;
+use ton_api::ton::adnl::message::message::Part as AdnlPartMessage;
+use ton_api::ton::adnl::message::message::Query as AdnlQueryMessage;
+use ton_api::ton::adnl::packetcontents::PacketContents as AdnlPacketContents;
+use ton_api::ton::adnl::Address;
+use ton_api::ton::adnl::Message as AdnlMessage;
+use ton_api::ton::adnl::PacketContents as AdnlPacketContentsBoxed;
+use ton_api::ton::pub_::publickey::Aes as AesKey;
+use ton_api::ton::TLObject;
+use ton_api::ton::{self};
+use ton_api::IntoBoxed;
+use ton_types::base64_encode;
+use ton_types::error;
+use ton_types::fail;
+use ton_types::sha256_digest;
+use ton_types::Ed25519KeyOption;
+use ton_types::KeyId;
+use ton_types::KeyOption;
+use ton_types::KeyOptionJson;
+use ton_types::Result;
+use ton_types::UInt256;
+
+use crate::common::add_counted_object_to_map;
+use crate::common::add_counted_object_to_map_with_update;
+use crate::common::add_unbound_object_to_map;
+use crate::common::add_unbound_object_to_map_with_update;
+use crate::common::hash;
+use crate::common::AdnlCryptoUtils;
+use crate::common::AdnlHandshake;
+use crate::common::AdnlPeers;
+use crate::common::AdnlPingSubscriber;
+use crate::common::CountedObject;
+use crate::common::Counter;
+use crate::common::Query;
+use crate::common::QueryAdnlAnswer;
+use crate::common::QueryCache;
+use crate::common::QueryId;
+use crate::common::Subscriber;
+use crate::common::TaggedAdnlMessage;
+use crate::common::TaggedByteSlice;
+use crate::common::TaggedTlObject;
+use crate::common::UpdatedAt;
+use crate::common::Version;
+use crate::common::TARGET;
+use crate::declare_counted;
+#[cfg(feature = "dump")]
+use crate::dump;
+#[cfg(feature = "telemetry")]
+use crate::telemetry::Metric;
+#[cfg(feature = "telemetry")]
+use crate::telemetry::MetricBuilder;
+#[cfg(feature = "telemetry")]
+use crate::telemetry::TelemetryItem;
+#[cfg(feature = "telemetry")]
+use crate::telemetry::TelemetryPrinter;
 
 const TARGET_QUERY: &str = "adnl_query";
 
@@ -211,8 +250,7 @@ impl AddressCache {
         })?;
         if ret {
             if let Some(index) = self.index.insert(index, address) {
-                self.cache
-                    .remove_with(index.val(), |&(_, val)| &val == index.key());
+                self.cache.remove_with(index.val(), |&(_, val)| &val == index.key());
             }
         }
         Ok(ret)
@@ -273,9 +311,9 @@ impl AddressCache {
 
     fn random(&self, skip: Option<&lockfree::set::Set<Arc<KeyId>>>) -> Option<Arc<KeyId>> {
         let max = self.count();
-        // We need a finite loop here because we can test skip set only on case-by-case basis
-        // due to multithreading. So it is possible that all items shall be skipped, and with
-        // infinite loop we will simply hang
+        // We need a finite loop here because we can test skip set only on case-by-case
+        // basis due to multithreading. So it is possible that all items shall
+        // be skipped, and with infinite loop we will simply hang
         for _ in 0..10 {
             if let Some(ret) = self.index.get(&rand::thread_rng().gen_range(0, max)) {
                 let ret = ret.val();
@@ -315,8 +353,8 @@ struct SubchannelSide {
 impl AdnlChannel {
     const CHANNEL_RESET: u64 = 0x8000000000000000;
     const ESTABLISHED: u64 = 0x4000000000000000;
-    const SEQNO_RESET: u64 = 0x2000000000000000;
     const MASK_TIMESTAMP: u64 = 0x0FFFFFFFFFFFFFFF;
+    const SEQNO_RESET: u64 = 0x2000000000000000;
 
     fn with_keys(
         local_key: &Arc<KeyId>,
@@ -364,11 +402,7 @@ impl AdnlChannel {
                 fwd_secret[1],
                 fwd_secret[0],
             ];
-            if Ordering::Less == cmp {
-                (fwd_secret, rev_secret)
-            } else {
-                (rev_secret, fwd_secret)
-            }
+            if Ordering::Less == cmp { (fwd_secret, rev_secret) } else { (rev_secret, fwd_secret) }
         };
         let ret = Self {
             local_key: local_key.clone(),
@@ -434,9 +468,7 @@ impl AdnlChannel {
     }
 
     fn calc_id(secret: &[u8; 32]) -> Result<ChannelId> {
-        let object = AesKey {
-            key: UInt256::with_array(*secret),
-        };
+        let object = AesKey { key: UInt256::with_array(*secret) };
         hash(object)
     }
 
@@ -490,7 +522,7 @@ impl AdnlChannel {
 
     fn encrypt(buf: &mut Vec<u8>, side: &SubchannelSide, version: Option<u16>) -> Result<()> {
         AdnlCryptoUtils::encode_header(buf, &side.id, None, version);
-        //dump!(info, TARGET, "secret ->", &side.secret);
+        // dump!(info, TARGET, "secret ->", &side.secret);
         Self::process_data(buf, &side.secret, if version.is_some() { 68 } else { 64 })
     }
 
@@ -553,9 +585,7 @@ impl AdnlNodeAddress {
             if old_version >= ip_address.version as u32 {
                 break false;
             }
-            let old_address = self
-                .ip_address
-                .fetch_or(LOCK_BIT, atomic::Ordering::Relaxed);
+            let old_address = self.ip_address.fetch_or(LOCK_BIT, atomic::Ordering::Relaxed);
             if (old_address & LOCK_BIT) != 0 {
                 // Locked for write, concurrent change
                 continue;
@@ -791,11 +821,7 @@ impl AdnlNodeConfig {
 
     /// Set throughput (packets / ms)
     pub fn set_throughput(&mut self, throughput: Option<u32>) {
-        self.throughput = if let Some(0) = &throughput {
-            None
-        } else {
-            throughput
-        }
+        self.throughput = if let Some(0) = &throughput { None } else { throughput }
     }
 
     fn add_key(&self, key: Arc<dyn KeyOption>, tag: usize) -> Result<Arc<KeyId>> {
@@ -853,12 +879,7 @@ impl AdnlNodeConfig {
         let removed_key = self.keys.remove(key);
         if let Some(removed) = self.tags.remove(&tag) {
             if removed.val() != key {
-                fail!(
-                    "Expected {} key with tag {} but got {}",
-                    key,
-                    tag,
-                    removed.val()
-                )
+                fail!("Expected {} key with tag {} but got {}", key, tag, removed.val())
             }
         }
         Ok(removed_key.is_some())
@@ -965,11 +986,7 @@ impl IpAddress {
     pub fn from_versioned_string(src: &str, version: Option<i32>) -> Result<Self> {
         let addr: SocketAddr = src.parse()?;
         if let IpAddr::V4(ip) = addr.ip() {
-            Ok(Self::from_versioned_parts(
-                u32::from_be_bytes(ip.octets()),
-                addr.port(),
-                version,
-            ))
+            Ok(Self::from_versioned_parts(u32::from_be_bytes(ip.octets()), addr.port(), version))
         } else {
             fail!("IPv6 addressed are not supported")
         }
@@ -977,10 +994,7 @@ impl IpAddress {
 
     /// Convert to UDP data
     pub fn into_udp(&self) -> Udp {
-        Udp {
-            ip: self.ip() as i32,
-            port: self.port() as i32,
-        }
+        Udp { ip: self.ip() as i32, port: self.port() as i32 }
     }
 
     fn from_versioned_parts(ip: u32, port: u16, version: Option<i32>) -> Self {
@@ -1121,10 +1135,7 @@ impl PeerHistory {
 
     /// Construct for send
     pub fn for_send() -> Self {
-        Self {
-            log: None,
-            seqno: AtomicU64::new(0),
-        }
+        Self { log: None, seqno: AtomicU64::new(0) }
     }
 
     /// Construct for recv
@@ -1140,18 +1151,18 @@ impl PeerHistory {
                 AtomicU64::new(0),
                 AtomicU64::new(0),
                 AtomicU64::new(0),
-                //                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                //                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                //                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                //                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                //                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                //                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)
+                //                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+                // AtomicU64::new(0),                AtomicU64::new(0),
+                // AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+                //                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+                // AtomicU64::new(0),                AtomicU64::new(0),
+                // AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+                //                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+                // AtomicU64::new(0),                AtomicU64::new(0),
+                // AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)
             ],
         };
-        Self {
-            log: Some(log),
-            seqno: AtomicU64::new(0),
-        }
+        Self { log: Some(log), seqno: AtomicU64::new(0) }
     }
 
     /// Print stats
@@ -1312,10 +1323,7 @@ impl PeerHistory {
                 )
                 .is_err()
             {
-                fail!(
-                    "INTERNAL ERROR: Peer packet seqno sync mismatch ({:x})",
-                    seqno
-                )
+                fail!("INTERNAL ERROR: Peer packet seqno sync mismatch ({:x})", seqno)
             }
             break;
         }
@@ -1345,10 +1353,8 @@ impl PeerHistory {
                 break;
             }
             for i in 0..HISTORY_SIZE {
-                log.masks[i].store(
-                    if i == HISTORY_SIZE / 2 { 1 } else { 0 },
-                    atomic::Ordering::Relaxed,
-                )
+                log.masks[i]
+                    .store(if i == HISTORY_SIZE / 2 { 1 } else { 0 }, atomic::Ordering::Relaxed)
             }
         }
         self.seqno.store(seqno, atomic::Ordering::Relaxed);
@@ -1363,10 +1369,7 @@ impl PeerHistory {
                 )
                 .is_err()
             {
-                fail!(
-                    "INTERNAL ERROR: peer packet seqno reset mismatch ({:x})",
-                    seqno
-                )
+                fail!("INTERNAL ERROR: peer packet seqno reset mismatch ({:x})", seqno)
             }
         }
         Ok(())
@@ -1422,15 +1425,9 @@ impl PeerState {
 
     fn next_seqno(&self, priority: bool) -> u64 {
         if priority {
-            self.priority_history
-                .seqno
-                .fetch_add(1, atomic::Ordering::Relaxed)
-                + 1
+            self.priority_history.seqno.fetch_add(1, atomic::Ordering::Relaxed) + 1
         } else {
-            self.ordinary_history
-                .seqno
-                .fetch_add(1, atomic::Ordering::Relaxed)
-                + 1
+            self.ordinary_history.seqno.fetch_add(1, atomic::Ordering::Relaxed) + 1
         }
     }
 
@@ -1439,8 +1436,7 @@ impl PeerState {
     }
 
     fn reset_reinit_date(&self, reinit_date: i32) {
-        self.reinit_date
-            .store(reinit_date, atomic::Ordering::Relaxed)
+        self.reinit_date.store(reinit_date, atomic::Ordering::Relaxed)
     }
 
     async fn reset_seqno(&self) -> Result<()> {
@@ -1474,9 +1470,7 @@ impl PeerState {
             format!("{}<-{} {}", &local[..6], &other[..6], tag)
         };
         let ret = Telemetry::create_metric_builder(name.as_str());
-        node.telemetry
-            .printer
-            .add_metric(TelemetryItem::MetricBuilder(ret.clone()));
+        node.telemetry.printer.add_metric(TelemetryItem::MetricBuilder(ret.clone()));
         ret
     }
 
@@ -1501,14 +1495,10 @@ impl PeerState {
         if let Some(packets) = &self.telemetry.packets {
             packets.update(1)
         }
-        self.telemetry
-            .bytes
-            .fetch_add(bytes, atomic::Ordering::Relaxed);
+        self.telemetry.bytes.fetch_add(bytes, atomic::Ordering::Relaxed);
         let elapsed = self.telemetry.start.elapsed().as_secs();
         if elapsed > self.telemetry.print.load(atomic::Ordering::Relaxed) {
-            self.telemetry
-                .print
-                .store(elapsed + 5, atomic::Ordering::Relaxed);
+            self.telemetry.print.store(elapsed + 5, atomic::Ordering::Relaxed);
             true
         } else {
             false
@@ -1649,8 +1639,7 @@ impl RecvPipeline {
                     self.adnl.telemetry.priority.proc_expired.update(1);
                     continue;
                 } else {
-                    self.proc_priority_packets
-                        .fetch_add(1, atomic::Ordering::Relaxed);
+                    self.proc_priority_packets.fetch_add(1, atomic::Ordering::Relaxed);
                     Some((data, subchannel, true))
                 }
             } else {
@@ -1675,15 +1664,13 @@ impl RecvPipeline {
                         if data.expired_at <= Version::get() as u32 {
                             #[cfg(feature = "telemetry")]
                             self.adnl.telemetry.ordinary.proc_expired.update(1);
-                            self.proc_ordinary_packets
-                                .fetch_sub(1, atomic::Ordering::Relaxed);
+                            self.proc_ordinary_packets.fetch_sub(1, atomic::Ordering::Relaxed);
                             continue 'again;
                         } else {
                             break Some((data, subchannel, false));
                         }
                     } else {
-                        self.proc_ordinary_packets
-                            .fetch_sub(1, atomic::Ordering::Relaxed);
+                        self.proc_ordinary_packets.fetch_sub(1, atomic::Ordering::Relaxed);
                         break None;
                     }
                 }
@@ -1692,11 +1679,9 @@ impl RecvPipeline {
                 //                self.count.fetch_sub(1, atomic::Ordering::Relaxed);
                 break ret;
             }
-            /*
-                        if self.count.load(atomic::Ordering::Relaxed) > 0 {
-                            continue
-                        }
-            */
+            // if self.count.load(atomic::Ordering::Relaxed) > 0 {
+            // continue
+            // }
             #[cfg(feature = "static_workers")]
             {
                 //            tokio::time::sleep(Duration::from_millis(1)).await;
@@ -1782,11 +1767,9 @@ impl RecvPipeline {
                     _ => (),
                 }
                 if priority {
-                    self.proc_priority_packets
-                        .fetch_sub(1, atomic::Ordering::Relaxed);
+                    self.proc_priority_packets.fetch_sub(1, atomic::Ordering::Relaxed);
                 } else {
-                    self.proc_ordinary_packets
-                        .fetch_sub(1, atomic::Ordering::Relaxed);
+                    self.proc_ordinary_packets.fetch_sub(1, atomic::Ordering::Relaxed);
                 }
                 #[cfg(feature = "telemetry")]
                 self.update_metric(priority);
@@ -1820,11 +1803,7 @@ struct SendData {
 
 impl Debug for SendData {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(
-            f,
-            "destination {:x}, data {:x?}",
-            self.destination, self.data
-        )
+        write!(f, "destination {:x}, data {:x?}", self.destination, self.data)
     }
 }
 
@@ -1866,11 +1845,8 @@ impl SendPipeline {
 
     fn get(&self) -> Result<SendJob> {
         loop {
-            let ret = if let Some(ret) = self.priority.get() {
-                Some(ret)
-            } else {
-                self.ordinary.get()
-            };
+            let ret =
+                if let Some(ret) = self.priority.get() { Some(ret) } else { self.ordinary.get() };
             if let Some(ret) = ret {
                 //                self.count.fetch_sub(1, atomic::Ordering::Relaxed);
                 return Ok(ret);
@@ -1881,9 +1857,7 @@ impl SendPipeline {
             let _mux = self
                 .sync
                 .wait_timeout(
-                    self.lock
-                        .lock()
-                        .map_err(|_| error!("Queue mutex poisoned"))?,
+                    self.lock.lock().map_err(|_| error!("Queue mutex poisoned"))?,
                     Duration::from_millis(Self::TIMEOUT_WAIT_QUEUE_MS),
                 )
                 .map_err(|_| error!("Queue wait failed"))?;
@@ -2023,9 +1997,7 @@ impl Telemetry {
                     info: info.clone(),
                     counter: self.checkers.clone().into(),
                 };
-                self.allocated
-                    .checkers
-                    .update(self.checkers.load(atomic::Ordering::Relaxed));
+                self.allocated.checkers.update(self.checkers.load(atomic::Ordering::Relaxed));
                 Ok(check)
             })?;
             if added {
@@ -2084,14 +2056,12 @@ impl Telemetry {
 
     fn get_message_info(msg: &AdnlMessage) -> String {
         match msg {
-            AdnlMessage::Adnl_Message_Part(part) => format!(
-                "AdnlMessagePart offset {} of {}",
-                part.offset, part.total_size
-            ),
-            AdnlMessage::Adnl_Message_Answer(answer) => format!(
-                "AdnlMessageAnswer tag {:08x}",
-                tag_from_data(&answer.answer)
-            ),
+            AdnlMessage::Adnl_Message_Part(part) => {
+                format!("AdnlMessagePart offset {} of {}", part.offset, part.total_size)
+            }
+            AdnlMessage::Adnl_Message_Answer(answer) => {
+                format!("AdnlMessageAnswer tag {:08x}", tag_from_data(&answer.answer))
+            }
             AdnlMessage::Adnl_Message_ConfirmChannel(_) => "AdnlMessageConfirmChannel".to_string(),
             AdnlMessage::Adnl_Message_CreateChannel(_) => "AdnlMessageCreateChannel".to_string(),
             AdnlMessage::Adnl_Message_Custom(custom) => {
@@ -2155,10 +2125,7 @@ pub struct AdnlStatus {
 
 impl AdnlStatus {
     fn with_params(priority: bool, channel: &Option<Arc<AdnlChannel>>) -> Self {
-        Self {
-            priority,
-            reset_at: channel.as_ref().map(|ch| ch.get_reset_at()),
-        }
+        Self { priority, reset_at: channel.as_ref().map(|ch| ch.get_reset_at()) }
     }
 }
 
@@ -2197,35 +2164,34 @@ impl Drop for AdnlNode {
 }
 
 impl AdnlNode {
-    /// ADNL options
-    pub const OPTION_FORCE_COMPRESSION: u32 = 0x0001; // Force traffic compression
-    pub const OPTION_FORCE_VERSIONING: u32 = 0x0002; // Force ADNL versioning
-
-    /// ADNL timeouts
-    pub const TIMEOUT_CHANNEL_RESET_SEC: u64 = 30;
-
-    /// ADNL versions
-    const VERSION_INITIAL: u16 = 0x0000;
-
-    const MASK_STOP: u32 = 0x80000000;
+    const CLOCK_TOLERANCE_SEC: i32 = 60;
+    #[cfg(feature = "dump")]
+    const MASK_DUMP: u32 = 0x00000020;
     const MASK_LOOPBACK: u32 = 0x00000001;
     const MASK_RECV: u32 = 0x00000002;
     const MASK_SEND: u32 = 0x00000004;
+    const MASK_STOP: u32 = 0x80000000;
     const MASK_SUBSCRIBERS: u32 = 0x00000008;
     const MASK_WATCHDOG: u32 = 0x00000010;
-    #[cfg(feature = "dump")]
-    const MASK_DUMP: u32 = 0x00000020;
-
-    const CLOCK_TOLERANCE_SEC: i32 = 60;
     const MAX_ADNL_MESSAGE: usize = 1024;
     const MAX_PRIORITY_ATTEMPTS: u64 = 10;
+    /// ADNL options
+    pub const OPTION_FORCE_COMPRESSION: u32 = 0x0001;
+    // Force traffic compression
+    pub const OPTION_FORCE_VERSIONING: u32 = 0x0002;
     const SIZE_BUFFER: usize = 2048;
     const TIMEOUT_ADDRESS_SEC: i32 = 1000;
-    const TIMEOUT_QUERY_MIN_MS: u64 = 500;
+    // Force ADNL versioning
+
+    /// ADNL timeouts
+    pub const TIMEOUT_CHANNEL_RESET_SEC: u64 = 30;
     const TIMEOUT_QUERY_MAX_MS: u64 = 5000;
+    const TIMEOUT_QUERY_MIN_MS: u64 = 500;
     const TIMEOUT_QUERY_STOP_MS: u64 = 1;
     const TIMEOUT_SHUTDOWN_MS: u64 = 2000;
     const TIMEOUT_TRANSFER_SEC: u64 = 5;
+    /// ADNL versions
+    const VERSION_INITIAL: u16 = 0x0000;
 
     /// Constructor
     pub async fn with_config(
@@ -2236,10 +2202,7 @@ impl AdnlNode {
         let peers = lockfree::map::Map::new();
         let mut added = false;
         for key in config.keys.iter() {
-            peers.insert(
-                key.val().id().clone(),
-                Peers::with_incinerator(&incinerator),
-            );
+            peers.insert(key.val().id().clone(), Peers::with_incinerator(&incinerator));
             added = true
         }
         if !added {
@@ -2344,26 +2307,21 @@ impl AdnlNode {
             #[cfg(feature = "dump")]
             dump: if let Some(dump_path) = dump_path {
                 let (sender, reader) = tokio::sync::mpsc::unbounded_channel();
-                let dump = Dump {
-                    path: dump_path,
-                    reader: lockfree::queue::Queue::new(),
-                    sender,
-                };
+                let dump = Dump { path: dump_path, reader: lockfree::queue::Queue::new(), sender };
                 dump.reader.push(reader);
                 Some(dump)
             } else {
                 None
             },
         };
-        ret.queue_send_loopback_readers
-            .push(queue_send_loopback_reader);
+        ret.queue_send_loopback_readers.push(queue_send_loopback_reader);
         Ok(Arc::new(ret))
     }
 
     pub fn check(&self) {
-        //        if self.queue_send_packets.count.load(atomic::Ordering::Relaxed) != 0 {
-        //            panic!("Fuckup with queue")
-        //        }
+        //        if self.queue_send_packets.count.
+        // load(atomic::Ordering::Relaxed) != 0 {            
+        // panic!("Fuckup with queue")        }
     }
 
     /// Start node
@@ -2383,25 +2341,21 @@ impl AdnlNode {
         socket_recv.set_recv_buffer_size(1 << 20)?;
         //        socket_recv.set_nonblocking(true)?;
         socket_recv.bind(
-            &SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-                node.config.ip_address.port(),
-            )
-            .into(),
+            &SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), node.config.ip_address.port())
+                .into(),
         )?;
         let socket_send = socket_recv.try_clone()?;
-        //        let socket_send = Arc::new(tokio::net::UdpSocket::from_std(socket.into())?);
-        //        let socket_send = tokio::net::UdpSocket::bind(
-        //            &SocketAddr::new(
-        //                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        //        let socket_send =
+        // Arc::new(tokio::net::UdpSocket::from_std(socket.into())?);        let
+        // socket_send = tokio::net::UdpSocket::bind(            
+        // &SocketAddr::new(                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         //                node.config.ip_address.port()
         //            )
         //        ).await?;
         //        let socket_send = Arc::new(socket_send);
         subscribers.push(Arc::new(AdnlPingSubscriber));
         // Subscribers poll
-        node.stop
-            .fetch_or(Self::MASK_SUBSCRIBERS, atomic::Ordering::Relaxed);
+        node.stop.fetch_or(Self::MASK_SUBSCRIBERS, atomic::Ordering::Relaxed);
         let start = Arc::new(Instant::now());
         let subscribers = Arc::new(subscribers);
         let subscribers_local = subscribers.clone();
@@ -2461,9 +2415,7 @@ impl AdnlNode {
             #[cfg(feature = "telemetry")]
             let mut last_check = Instant::now();
             let ts_start = Instant::now();
-            node_stop
-                .stop
-                .fetch_or(Self::MASK_WATCHDOG, atomic::Ordering::Relaxed);
+            node_stop.stop.fetch_or(Self::MASK_WATCHDOG, atomic::Ordering::Relaxed);
             loop {
                 tokio::time::sleep(Duration::from_millis(Self::TIMEOUT_QUERY_STOP_MS)).await;
                 let ts = (ts_start.elapsed().as_secs() << 8) as u64;
@@ -2490,12 +2442,11 @@ impl AdnlNode {
                         .allocated
                         .peers
                         .update(node_stop.allocated.peers.load(atomic::Ordering::Relaxed));
-                    node_stop.telemetry.allocated.transfers.update(
-                        node_stop
-                            .allocated
-                            .transfers
-                            .load(atomic::Ordering::Relaxed),
-                    );
+                    node_stop
+                        .telemetry
+                        .allocated
+                        .transfers
+                        .update(node_stop.allocated.transfers.load(atomic::Ordering::Relaxed));
                     node_stop.telemetry.printer.try_print();
                     if last_check.elapsed().as_secs() >= Telemetry::PERIOD_AVERAGE_SEC {
                         node_stop.telemetry.evaluate_checks(&node_stop.config);
@@ -2567,18 +2518,14 @@ impl AdnlNode {
                 }
                 status.store(ts | 5, atomic::Ordering::Relaxed);
             }
-            node_stop
-                .stop
-                .fetch_and(!Self::MASK_WATCHDOG, atomic::Ordering::Relaxed);
+            node_stop.stop.fetch_and(!Self::MASK_WATCHDOG, atomic::Ordering::Relaxed);
             log::warn!(target: TARGET, "Node stopping watchdog stopped");
         });
         // Remote connections
         let node_recv = node.clone();
         thread::spawn(move || {
             let mut buf = [0u8; Self::SIZE_BUFFER];
-            node_recv
-                .stop
-                .fetch_or(Self::MASK_RECV, atomic::Ordering::Relaxed);
+            node_recv.stop.fetch_or(Self::MASK_RECV, atomic::Ordering::Relaxed);
             loop {
                 if (node_recv.stop.load(atomic::Ordering::Relaxed) & Self::MASK_STOP) != 0 {
                     break;
@@ -2623,9 +2570,7 @@ impl AdnlNode {
                     .map_or(Subchannel::None, |subchannel| subchannel.val().clone());
                 recv_pipeline.clone().put(packet, subchannel);
             }
-            node_recv
-                .stop
-                .fetch_and(!Self::MASK_RECV, atomic::Ordering::Relaxed);
+            node_recv.stop.fetch_and(!Self::MASK_RECV, atomic::Ordering::Relaxed);
             log::warn!(target: TARGET, "Node socket receiver stopped");
         });
         let node_send = node.clone();
@@ -2633,9 +2578,7 @@ impl AdnlNode {
             const PERIOD_NANOS: u128 = 1000000;
             let start_history = Instant::now();
             let mut history = None;
-            node_send
-                .stop
-                .fetch_or(Self::MASK_SEND, atomic::Ordering::Relaxed);
+            node_send.stop.fetch_or(Self::MASK_SEND, atomic::Ordering::Relaxed);
             loop {
                 let job = node_send.send_pipeline.get();
                 let (job, stop) = match job {
@@ -2702,17 +2645,13 @@ impl AdnlNode {
                     }
                 }
             }
-            node_send
-                .stop
-                .fetch_and(!Self::MASK_SEND, atomic::Ordering::Relaxed);
+            node_send.stop.fetch_and(!Self::MASK_SEND, atomic::Ordering::Relaxed);
             log::warn!(target: TARGET, "Node socket sender stopped");
         });
         // Local connections
         let node_loop = node.clone();
         tokio::spawn(async move {
-            node_loop
-                .stop
-                .fetch_or(Self::MASK_LOOPBACK, atomic::Ordering::Relaxed);
+            node_loop.stop.fetch_or(Self::MASK_LOOPBACK, atomic::Ordering::Relaxed);
             while let Some((msg, src)) = queue_send_loopback_reader.recv().await {
                 if (node_loop.stop.load(atomic::Ordering::Relaxed) & Self::MASK_STOP) != 0 {
                     break;
@@ -2737,9 +2676,7 @@ impl AdnlNode {
                 });
             }
             Self::graceful_close(queue_send_loopback_reader).await;
-            node_loop
-                .stop
-                .fetch_and(!Self::MASK_LOOPBACK, atomic::Ordering::Relaxed);
+            node_loop.stop.fetch_and(!Self::MASK_LOOPBACK, atomic::Ordering::Relaxed);
             log::warn!(target: TARGET, "Node loopback stopped");
         });
         // Traffic dump
@@ -2753,17 +2690,11 @@ impl AdnlNode {
             if let Some(mut reader) = dump.reader.pop() {
                 tokio::spawn(async move {
                     fn prepare(path: &PathBuf, file: &String, alive: bool) -> Result<PathBuf> {
-                        let dst = if alive {
-                            path.join("alive").join(file)
-                        } else {
-                            path.join(file)
-                        };
+                        let dst =
+                            if alive { path.join("alive").join(file) } else { path.join(file) };
                         if !dst.exists() {
-                            let src = if alive {
-                                path.join(file)
-                            } else {
-                                path.join("alive").join(file)
-                            };
+                            let src =
+                                if alive { path.join(file) } else { path.join("alive").join(file) };
                             if src.exists() {
                                 rename(src, dst.as_path())?
                             }
@@ -2804,8 +2735,7 @@ impl AdnlNode {
     /// Stop node
     pub async fn stop(&self) {
         log::warn!(target: TARGET, "Stopping ADNL node...");
-        self.stop
-            .fetch_or(Self::MASK_STOP, atomic::Ordering::Relaxed);
+        self.stop.fetch_or(Self::MASK_STOP, atomic::Ordering::Relaxed);
         loop {
             tokio::time::sleep(Duration::from_millis(Self::TIMEOUT_QUERY_STOP_MS)).await;
             let stop = self.stop.load(atomic::Ordering::Relaxed);
@@ -2831,9 +2761,7 @@ impl AdnlNode {
     #[cfg(feature = "telemetry")]
     pub fn add_metric(&self, name: &str) -> Arc<Metric> {
         let ret = Telemetry::create_metric(name);
-        self.telemetry
-            .printer
-            .add_metric(TelemetryItem::Metric(ret.clone()));
+        self.telemetry.printer.add_metric(TelemetryItem::Metric(ret.clone()));
         ret
     }
 
@@ -2850,58 +2778,56 @@ impl AdnlNode {
         let mut error = None;
         let mut ret = peer_key.id().clone();
         let result =
-            self.peers(local_key)?
-                .map_of
-                .insert_with(ret.clone(), |key, inserted, found| {
-                    if let Some((_, found)) = found {
-                        ret = key.clone();
-                        found.address.update(peer_ip_address);
-                        lockfree::map::Preview::Discard
-                    } else if inserted.is_some() {
-                        ret = key.clone();
-                        lockfree::map::Preview::Keep
-                    } else {
-                        let address =
-                            AdnlNodeAddress::from_ip_address_and_key(peer_ip_address, peer_key);
-                        match address {
-                            Ok(address) => {
-                                #[cfg(feature = "telemetry")]
-                                let peers = AdnlPeers::with_keys(local_key.clone(), ret.clone());
-                                let peer = Peer {
-                                    address,
-                                    recv_state: PeerState::for_receive_with_reinit_date(
-                                        self.start_time,
-                                        #[cfg(feature = "telemetry")]
-                                        self,
-                                        #[cfg(feature = "telemetry")]
-                                        &peers,
-                                        #[cfg(feature = "telemetry")]
-                                        None,
-                                    ),
-                                    send_state: PeerState::for_send(
-                                        #[cfg(feature = "telemetry")]
-                                        self,
-                                        #[cfg(feature = "telemetry")]
-                                        &peers,
-                                        #[cfg(feature = "telemetry")]
-                                        None,
-                                    ),
-                                    counter: self.allocated.peers.clone().into(),
-                                };
-                                #[cfg(feature = "telemetry")]
-                                self.telemetry
-                                    .allocated
-                                    .peers
-                                    .update(self.allocated.peers.load(atomic::Ordering::Relaxed));
-                                lockfree::map::Preview::New(peer)
-                            }
-                            Err(err) => {
-                                error = Some(err);
-                                lockfree::map::Preview::Discard
-                            }
+            self.peers(local_key)?.map_of.insert_with(ret.clone(), |key, inserted, found| {
+                if let Some((_, found)) = found {
+                    ret = key.clone();
+                    found.address.update(peer_ip_address);
+                    lockfree::map::Preview::Discard
+                } else if inserted.is_some() {
+                    ret = key.clone();
+                    lockfree::map::Preview::Keep
+                } else {
+                    let address =
+                        AdnlNodeAddress::from_ip_address_and_key(peer_ip_address, peer_key);
+                    match address {
+                        Ok(address) => {
+                            #[cfg(feature = "telemetry")]
+                            let peers = AdnlPeers::with_keys(local_key.clone(), ret.clone());
+                            let peer = Peer {
+                                address,
+                                recv_state: PeerState::for_receive_with_reinit_date(
+                                    self.start_time,
+                                    #[cfg(feature = "telemetry")]
+                                    self,
+                                    #[cfg(feature = "telemetry")]
+                                    &peers,
+                                    #[cfg(feature = "telemetry")]
+                                    None,
+                                ),
+                                send_state: PeerState::for_send(
+                                    #[cfg(feature = "telemetry")]
+                                    self,
+                                    #[cfg(feature = "telemetry")]
+                                    &peers,
+                                    #[cfg(feature = "telemetry")]
+                                    None,
+                                ),
+                                counter: self.allocated.peers.clone().into(),
+                            };
+                            #[cfg(feature = "telemetry")]
+                            self.telemetry
+                                .allocated
+                                .peers
+                                .update(self.allocated.peers.load(atomic::Ordering::Relaxed));
+                            lockfree::map::Preview::New(peer)
+                        }
+                        Err(err) => {
+                            error = Some(err);
+                            lockfree::map::Preview::Discard
                         }
                     }
-                });
+                }
+            });
         if let Some(error) = error {
             return Err(error);
         }
@@ -2934,11 +2860,7 @@ impl AdnlNode {
     /// Calculate timeout from roundtrip, milliseconds
     pub fn calc_timeout(roundtrip: Option<u64>) -> u64 {
         let timeout = roundtrip.unwrap_or(Self::TIMEOUT_QUERY_MAX_MS);
-        if timeout < Self::TIMEOUT_QUERY_MIN_MS {
-            Self::TIMEOUT_QUERY_MIN_MS
-        } else {
-            timeout
-        }
+        if timeout < Self::TIMEOUT_QUERY_MIN_MS { Self::TIMEOUT_QUERY_MIN_MS } else { timeout }
     }
 
     /// Check protocol options
@@ -2962,10 +2884,7 @@ impl AdnlNode {
     /// Delete peer
     pub fn delete_peer(&self, local_key: &Arc<KeyId>, peer_key: &Arc<KeyId>) -> Result<bool> {
         let peers = self.peers.get(local_key).ok_or_else(|| {
-            error!(
-                "Try to remove peer {} from unknown local key {}",
-                peer_key, local_key
-            )
+            error!("Try to remove peer {} from unknown local key {}", peer_key, local_key)
         })?;
         self.delete_peer_from_peers(peers.val(), peer_key)
     }
@@ -3000,11 +2919,9 @@ impl AdnlNode {
             );
             return Ok(None);
         }
-        /*
-                if (list.version > version) || (list.reinit_date > version) {
-                    fail!("Address list version is too high: {} vs {}", list.version, version)
-                }
-        */
+        // if (list.version > version) || (list.reinit_date > version) {
+        // fail!("Address list version is too high: {} vs {}", list.version, version)
+        // }
         if (list.expire_at != 0) && (list.expire_at < version) {
             log::warn!(target: TARGET, "Address list is expired");
             return Ok(None);
@@ -3029,10 +2946,7 @@ impl AdnlNode {
         peers: &AdnlPeers,
         timeout: Option<u64>,
     ) -> Result<Option<TLObject>> {
-        Ok(self
-            .query_with_prefix_get_status(None, query, peers, timeout)
-            .await?
-            .reply)
+        Ok(self.query_with_prefix_get_status(None, query, peers, timeout).await?.reply)
     }
 
     /// Send query and get connection status
@@ -3042,8 +2956,7 @@ impl AdnlNode {
         peers: &AdnlPeers,
         timeout: Option<u64>,
     ) -> Result<AdnlReplyWithStatus> {
-        self.query_with_prefix_get_status(None, query, peers, timeout)
-            .await
+        self.query_with_prefix_get_status(None, query, peers, timeout).await
     }
 
     /// Send query with prefix
@@ -3054,10 +2967,7 @@ impl AdnlNode {
         peers: &AdnlPeers,
         timeout: Option<u64>,
     ) -> Result<Option<TLObject>> {
-        Ok(self
-            .query_with_prefix_get_status(prefix, query, peers, timeout)
-            .await?
-            .reply)
+        Ok(self.query_with_prefix_get_status(prefix, query, peers, timeout).await?.reply)
     }
 
     /// Send query with prefix and get connection status
@@ -3097,10 +3007,7 @@ impl AdnlNode {
                         );
                         let ret = AdnlReplyWithStatus {
                             reply: None,
-                            status: AdnlStatus {
-                                priority,
-                                reset_at: None,
-                            },
+                            status: AdnlStatus { priority, reset_at: None },
                         };
                         Ok(ret)
                     }
@@ -3119,24 +3026,19 @@ impl AdnlNode {
                 }
             } else {
                 reader.close();
-                fail!(
-                    "INTERNAL ERROR: reply to query {:?} read mismatch",
-                    query.object
-                )
+                fail!("INTERNAL ERROR: reply to query {:?} read mismatch", query.object)
             }
         }
 
         // Send in default context first
-        let ctx_priority = self
-            .clone()
-            .send_query_with_priority(prefix, query, peers, timeout, true)?;
+        let ctx_priority =
+            self.clone().send_query_with_priority(prefix, query, peers, timeout, true)?;
 
         // Send in backup context if required
         match ctx_priority.repeat {
             MessageRepeat::Required => {
-                let ctx_ordinary = self
-                    .clone()
-                    .send_query_with_priority(prefix, query, peers, timeout, false);
+                let ctx_ordinary =
+                    self.clone().send_query_with_priority(prefix, query, peers, timeout, false);
                 match ctx_ordinary {
                     Err(e) => {
                         log::warn!(
@@ -3153,11 +3055,7 @@ impl AdnlNode {
                         for p in [true, false] {
                             let cloned_peers = peers.clone();
                             let cloned_sender = sender.clone();
-                            let ctx = if p {
-                                ctx_priority.clone()
-                            } else {
-                                ctx_ordinary.clone()
-                            };
+                            let ctx = if p { ctx_priority.clone() } else { ctx_ordinary.clone() };
                             let node = self.clone();
                             tokio::spawn(async move {
                                 cloned_sender
@@ -3199,10 +3097,7 @@ impl AdnlNode {
         let other_key = to_reset.other();
         let peers = self.peers(local_key)?;
         let peer = peers.map_of.get(other_key).ok_or_else(|| {
-            error!(
-                "Try to reset unknown peer pair {} -> {}",
-                local_key, other_key
-            )
+            error!("Try to reset unknown peer pair {} -> {}", local_key, other_key)
         })?;
         log::warn!(target: TARGET, "Resetting peer pair {} -> {}", local_key, other_key);
         let peer = peer.val();
@@ -3263,16 +3158,12 @@ impl AdnlNode {
         peers: &AdnlPeers,
     ) -> Result<AdnlStatus> {
         let msg = TaggedAdnlMessage {
-            object: AdnlCustomMessage {
-                data: data.object.to_vec().into(),
-            }
-            .into_boxed(),
+            object: AdnlCustomMessage { data: data.object.to_vec().into() }.into_boxed(),
             #[cfg(feature = "telemetry")]
             tag: data.tag,
         };
         let (channel, repeat) = if peers.local() == peers.other() {
-            self.queue_send_loopback_packets
-                .send((msg.object, peers.local().clone()))?;
+            self.queue_send_loopback_packets.send((msg.object, peers.local().clone()))?;
             (None, MessageRepeat::Unapplicable)
         } else {
             self.send_message_to_peer(msg, peers, false)?
@@ -3291,10 +3182,7 @@ impl AdnlNode {
     async fn add_subchannels(&self, channel: Arc<AdnlChannel>, wait: bool) -> Result<()> {
         let peers = self.peers(&channel.local_key)?;
         let peer = peers.map_of.get(&channel.other_key).ok_or_else(|| {
-            error!(
-                "Cannot add subchannels to unknown peer {}",
-                channel.other_key
-            )
+            error!("Cannot add subchannels to unknown peer {}", channel.other_key)
         })?;
         let peer = peer.val();
         let added = if wait {
@@ -3354,19 +3242,13 @@ impl AdnlNode {
                 fail!("INTERNAL ERROR: mismatch in channel adding")
             }
         }
-        self.channels_recv.insert(
-            channel.ordinary_recv_id().clone(),
-            Subchannel::Ordinary(channel.clone()),
-        );
-        self.channels_recv.insert(
-            channel.priority_recv_id().clone(),
-            Subchannel::Priority(channel.clone()),
-        );
+        self.channels_recv
+            .insert(channel.ordinary_recv_id().clone(), Subchannel::Ordinary(channel.clone()));
+        self.channels_recv
+            .insert(channel.priority_recv_id().clone(), Subchannel::Priority(channel.clone()));
         peer.send_state.priority_history.reset(0).await?;
         peer.recv_state.priority_history.reset(0).await?;
-        let flags = channel
-            .flags
-            .fetch_or(AdnlChannel::SEQNO_RESET, atomic::Ordering::Relaxed);
+        let flags = channel.flags.fetch_or(AdnlChannel::SEQNO_RESET, atomic::Ordering::Relaxed);
         if flags & AdnlChannel::SEQNO_RESET != 0 {
             fail!("INTERNAL ERROR: mismatch in channel seqno reset")
         }
@@ -3451,11 +3333,7 @@ impl AdnlNode {
         } else {
             peers.map_of.get(&ret)
         };
-        let peer = if let Some(peer) = peer {
-            peer
-        } else {
-            fail!("Unknown peer {}", ret)
-        };
+        let peer = if let Some(peer) = peer { peer } else { fail!("Unknown peer {}", ret) };
         let peer = peer.val();
         if check {
             check_signature(packet, &peer.address.key, false)?
@@ -3568,12 +3446,9 @@ impl AdnlNode {
         }
         if let Some(seqno) = &packet.seqno {
             match peer.recv_state.save_seqno(*seqno as u64, priority).await {
-                Err(e) => fail!(
-                    "Peer {} ({:?}): {}",
-                    ret,
-                    channel.map(|ch| ch.other_key.clone()),
-                    e
-                ),
+                Err(e) => {
+                    fail!("Peer {} ({:?}): {}", ret, channel.map(|ch| ch.other_key.clone()), e)
+                }
                 Ok(false) => return Ok(None),
                 _ => (),
             }
@@ -3614,12 +3489,7 @@ impl AdnlNode {
         let peer = if let Some(peer) = peer.map_of.get(other_key) {
             peer
         } else {
-            fail!(
-                "Channel {} with unknown peer {} -> {}",
-                context,
-                local_key,
-                other_key
-            )
+            fail!("Channel {} with unknown peer {} -> {}", context, local_key, other_key)
         };
         let local_pvt_key = &peer.val().address.channel_key;
         let local_pub_key = local_pvt_key.pub_key()?;
@@ -3679,10 +3549,9 @@ impl AdnlNode {
             }
         }
         // Restore channel health
-        let was = channel.flags.swap(
-            AdnlChannel::ESTABLISHED | AdnlChannel::SEQNO_RESET,
-            atomic::Ordering::Relaxed,
-        );
+        let was = channel
+            .flags
+            .swap(AdnlChannel::ESTABLISHED | AdnlChannel::SEQNO_RESET, atomic::Ordering::Relaxed);
         if (was & AdnlChannel::MASK_TIMESTAMP) != 0 {
             log::info!(
                 target: TARGET,
@@ -3787,17 +3656,15 @@ impl AdnlNode {
         ) -> Result<()> {
             if let Some(msg) = msg {
                 if peers.local() == peers.other() {
-                    node.queue_send_loopback_packets
-                        .send((msg.object, peers.local().clone()))?;
+                    node.queue_send_loopback_packets.send((msg.object, peers.local().clone()))?;
                     Ok(())
                 } else {
                     match node.send_message_to_peer(msg, peers, priority)? {
                         (_, MessageRepeat::NotNeeded) if priority => Ok(()),
                         (_, MessageRepeat::Unapplicable) if !priority => Ok(()),
-                        (_, x) => fail!(
-                            "INTERNAL ERROR: bad repeat {:?} in answer to ADNL message",
-                            x
-                        ),
+                        (_, x) => {
+                            fail!("INTERNAL ERROR: bad repeat {:?} in answer to ADNL message", x)
+                        }
                     }
                 }
             } else {
@@ -3849,12 +3716,8 @@ impl AdnlNode {
                 }
                 let transfer = transfer.val();
                 transfer.updated.refresh();
-                transfer
-                    .data
-                    .insert(part.offset as usize, part.data.to_vec());
-                transfer
-                    .received
-                    .fetch_add(part.data.len(), atomic::Ordering::Relaxed);
+                transfer.data.insert(part.offset as usize, part.data.to_vec());
+                transfer.received.fetch_add(part.data.len(), atomic::Ordering::Relaxed);
                 match Self::update_transfer(transfer_id, transfer) {
                     Ok(Some(msg)) => {
                         self.transfers.remove(transfer_id);
@@ -3885,11 +3748,10 @@ impl AdnlNode {
                     confirm.key.as_slice(),
                     "confirmation",
                 )?;
-                /*
-                                self.channels_send.insert(peers.other().clone(), channel.clone());
-                log::warn!(target: TARGET, "On recv confirm channel in {}", channel.local_key);
-                                self.add_receive_subchannels(channel).await?;
-                                */
+                // self.channels_send.insert(peers.other().clone(), channel.clone());
+                // log::warn!(target: TARGET, "On recv confirm channel in {}",
+                // channel.local_key); self.add_receive_subchannels(channel).
+                // await?;
                 self.add_subchannels(channel, false).await?;
                 None
             }
@@ -3907,14 +3769,13 @@ impl AdnlNode {
                 } else {
                     fail!("INTERNAL ERROR: local key mismatch in channel creation")
                 };
-                /*
-                                self.channels_wait
-                                    .insert(peers.other().clone(), channel.clone())
-                                    .or(self.channels_send.remove(peers.other()))
-                                    .and_then(|removed| self.drop_receive_subchannels(removed.val()));
-                log::warn!(target: TARGET, "On recv create channel in {}", channel.local_key);
-                                self.add_receive_subchannels(channel).await?;
-                */
+                // self.channels_wait
+                // .insert(peers.other().clone(), channel.clone())
+                // .or(self.channels_send.remove(peers.other()))
+                // .and_then(|removed| self.drop_receive_subchannels(removed.val()));
+                // log::warn!(target: TARGET, "On recv create channel in {}",
+                // channel.local_key); self.add_receive_subchannels(channel).
+                // await?;
                 self.add_subchannels(channel, true).await?;
                 Some(TaggedAdnlMessage {
                     object: msg,
@@ -4013,7 +3874,7 @@ impl AdnlNode {
                     if let MessageRepeat::Required = context.repeat {
                         None
                     } else {
-                        /* Monitor channel health using queries */
+                        // Monitor channel health using queries
                         if let Some(channel) = &context.channel {
                             self.try_reset_peers(channel, peers)?;
                         }
@@ -4080,20 +3941,18 @@ impl AdnlNode {
             }
         }
         let pkt = deserialize_typed::<AdnlPacketContentsBoxed>(&packet.buf)?.only();
-        let other_key = if let Some(key) = self
-            .check_packet(&pkt, priority, &local_key, channel)
-            .await?
-        {
-            key
-        } else {
-            #[cfg(feature = "telemetry")]
-            if priority {
-                self.telemetry.priority.proc_invalid.update(1)
+        let other_key =
+            if let Some(key) = self.check_packet(&pkt, priority, &local_key, channel).await? {
+                key
             } else {
-                self.telemetry.ordinary.proc_invalid.update(1)
-            }
-            return Ok(());
-        };
+                #[cfg(feature = "telemetry")]
+                if priority {
+                    self.telemetry.priority.proc_invalid.update(1)
+                } else {
+                    self.telemetry.ordinary.proc_invalid.update(1)
+                }
+                return Ok(());
+            };
         #[cfg(feature = "dump")]
         if Self::need_dump(&pkt) {
             if let Some(dump) = self.dump.as_ref() {
@@ -4104,29 +3963,19 @@ impl AdnlNode {
                     pkt,
                     dump!(&packet.buf[..])
                 );
-                dump.sender.send(DumpRecord {
-                    alive: true,
-                    key_id: other_key.clone(),
-                    msg,
-                })?;
+                dump.sender.send(DumpRecord { alive: true, key_id: other_key.clone(), msg })?;
             }
         }
         let peers = Arc::new(AdnlPeers::with_keys(local_key, other_key));
         #[cfg(feature = "telemetry")]
         if let Some(peer) = self.peers(peers.local())?.map_of.get(peers.other()) {
-            peer.val()
-                .update_recv_stats(received_len as u64, peers.local());
+            peer.val().update_recv_stats(received_len as u64, peers.local());
         }
         if let Some(msg) = pkt.message {
             #[cfg(feature = "telemetry")]
-            let chk = self
-                .telemetry
-                .add_check(Telemetry::get_message_info(&msg))?;
+            let chk = self.telemetry.add_check(Telemetry::get_message_info(&msg))?;
             #[allow(clippy::let_and_return)]
-            let res = self
-                .clone()
-                .process_message(subscribers, msg, &peers, priority)
-                .await;
+            let res = self.clone().process_message(subscribers, msg, &peers, priority).await;
             #[cfg(feature = "telemetry")]
             self.telemetry.drop_check(chk);
             res
@@ -4134,13 +3983,8 @@ impl AdnlNode {
             let mut res = Ok(());
             for msg in msgs.0 {
                 #[cfg(feature = "telemetry")]
-                let chk = self
-                    .telemetry
-                    .add_check(Telemetry::get_message_info(&msg))?;
-                res = self
-                    .clone()
-                    .process_message(subscribers, msg, &peers, priority)
-                    .await;
+                let chk = self.telemetry.add_check(Telemetry::get_message_info(&msg))?;
+                res = self.clone().process_message(subscribers, msg, &peers, priority).await;
                 #[cfg(feature = "telemetry")]
                 self.telemetry.drop_check(chk);
                 if res.is_err() {
@@ -4214,22 +4058,13 @@ impl AdnlNode {
         let src = adnl_peers.local();
         let dst = adnl_peers.other();
         let peers = self.peers(src)?;
-        let mut peer = peers
-            .map_of
-            .get(dst)
-            .ok_or_else(|| error!("Unknown peer {}", dst))?;
-        let mut channel = peers
-            .channels_send
-            .get(dst)
-            .map(|guard| guard.val().clone());
+        let mut peer = peers.map_of.get(dst).ok_or_else(|| error!("Unknown peer {}", dst))?;
+        let mut channel = peers.channels_send.get(dst).map(|guard| guard.val().clone());
 
         if let Some(ch) = &channel {
             if let AdnlMessage::Adnl_Message_Custom(_) = &msg.object {
                 if self.try_reset_peers(ch, adnl_peers)? {
-                    peer = peers
-                        .map_of
-                        .get(dst)
-                        .ok_or_else(|| error!("Unknown peer {}", dst))?;
+                    peer = peers.map_of.get(dst).ok_or_else(|| error!("Unknown peer {}", dst))?;
                     channel = None;
                 }
             }
@@ -4250,11 +4085,7 @@ impl AdnlNode {
         } else {
             None
         };
-        let mut size = if create_channel_msg.is_some() {
-            SIZE_CREATE_CHANNEL_MSG
-        } else {
-            0
-        };
+        let mut size = if create_channel_msg.is_some() { SIZE_CREATE_CHANNEL_MSG } else { 0 };
         size += match &msg.object {
             AdnlMessage::Adnl_Message_Answer(answer) => answer.answer.len() + SIZE_ANSWER_MSG,
             AdnlMessage::Adnl_Message_ConfirmChannel(_) => SIZE_CONFIRM_CHANNEL_MSG,
@@ -4371,17 +4202,11 @@ impl AdnlNode {
         };
         let mut pkt = AdnlPacketContents {
             rand1: Self::gen_rand().into(),
-            from: if channel.is_some() {
-                None
-            } else {
-                Some(source.try_into()?)
-            },
+            from: if channel.is_some() { None } else { Some(source.try_into()?) },
             from_short: if channel.is_some() {
                 None
             } else {
-                Some(AdnlIdShort {
-                    id: UInt256::with_array(source.id().data().clone()),
-                })
+                Some(AdnlIdShort { id: UInt256::with_array(source.id().data().clone()) })
             },
             message,
             messages: messages.map(|messages| messages.into()),
@@ -4393,11 +4218,7 @@ impl AdnlNode {
             confirm_seqno: Some(peer.recv_state.seqno(priority) as i64),
             recv_addr_list_version: None,
             recv_priority_addr_list_version: None,
-            reinit_date: if channel.is_some() {
-                None
-            } else {
-                Some(peer.recv_state.reinit_date())
-            },
+            reinit_date: if channel.is_some() { None } else { Some(peer.recv_state.reinit_date()) },
             dst_reinit_date: if channel.is_some() {
                 None
             } else {
@@ -4472,16 +4293,12 @@ impl AdnlNode {
                         Ok(metric.clone())
                     })?;
                 if added {
-                    self.telemetry
-                        .printer
-                        .add_metric(TelemetryItem::MetricBuilder(metric))
+                    self.telemetry.printer.add_metric(TelemetryItem::MetricBuilder(metric))
                 }
             }
         }
-        let job = SendData {
-            destination: peer.address.ip_address.load(atomic::Ordering::Relaxed),
-            data,
-        };
+        let job =
+            SendData { destination: peer.address.ip_address.load(atomic::Ordering::Relaxed), data };
         if priority {
             self.send_pipeline.put_priority(SendJob::Data(job))
         } else {
@@ -4507,20 +4324,13 @@ impl AdnlNode {
             Self::get_query_print_id(&query_id, peers.other(), priority)
         );
         let (channel, repeat) = if peers.local() == peers.other() {
-            self.queue_send_loopback_packets
-                .send((msg.object, peers.local().clone()))?;
+            self.queue_send_loopback_packets.send((msg.object, peers.local().clone()))?;
             (None, MessageRepeat::Unapplicable)
         } else {
             self.send_message_to_peer(msg, &peers, priority)?
         };
-        self.queue_monitor_queries
-            .push((timeout.unwrap_or(Self::TIMEOUT_QUERY_MAX_MS), query_id));
-        let ret = QuerySendContext {
-            channel,
-            query_id,
-            repeat,
-            reply_ping: ping,
-        };
+        self.queue_monitor_queries.push((timeout.unwrap_or(Self::TIMEOUT_QUERY_MAX_MS), query_id));
+        let ret = QuerySendContext { channel, query_id, repeat, reply_ping: ping };
         Ok(Arc::new(ret))
     }
 

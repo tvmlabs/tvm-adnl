@@ -1,25 +1,27 @@
-use crate::node::{AdnlNodeConfig, AdnlNodeConfigJson};
-use std::{
-    env,
-    ffi::OsString,
-    fs::{read_to_string, File},
-    io::Write,
-    net::{IpAddr, SocketAddr},
-    path::PathBuf,
-};
-use tvm_types::{fail, sha256_digest, Result};
+use std::env;
+use std::ffi::OsString;
+use std::fs::read_to_string;
+use std::fs::File;
+use std::io::Write;
+use std::net::IpAddr;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+
+use tvm_types::fail;
+use tvm_types::sha256_digest;
+use tvm_types::Result;
+
+use crate::node::AdnlNodeConfig;
+use crate::node::AdnlNodeConfigJson;
 
 const ENV_VAR_PORT: &str = "BASE_PORT";
 
 pub fn configure_ip(template: &str, default_port: u16) -> String {
     let port = env::var(ENV_VAR_PORT).unwrap_or_else(|_| format!("{}", default_port));
-    let Some(pos) = template.find(":") else {
-        panic!("Wrong IP template {}", template)
-    };
+    let Some(pos) = template.find(":") else { panic!("Wrong IP template {}", template) };
     let port: u16 = port.parse().expect(&format!("Wrong port value {}", port));
-    let offset: u16 = template[pos + 1..]
-        .parse()
-        .expect(&format!("Wrong port in template {}", template));
+    let offset: u16 =
+        template[pos + 1..].parse().expect(&format!("Wrong port in template {}", template));
     let ret = format!("{}:{}", &template[..pos], port + offset);
     println!("\nUsing {} local address", ret);
     ret
@@ -53,10 +55,7 @@ pub fn get_test_config_path(prefix: &str, addr: &SocketAddr) -> Result<PathBuf> 
         if parent.as_os_str().is_empty() {
             None
         } else if !parent.exists() {
-            fail!(
-                "Cannot generate config path: folder '{}' does not exist",
-                parent.display()
-            )
+            fail!("Cannot generate config path: folder '{}' does not exist", parent.display())
         } else {
             Some(parent)
         }
@@ -74,11 +73,7 @@ pub fn get_test_config_path(prefix: &str, addr: &SocketAddr) -> Result<PathBuf> 
         path.push(prefix);
     }
     let suffix = if let IpAddr::V4(ip) = addr.ip() {
-        format!(
-            "_{}_{}.json",
-            ip.to_string().as_str(),
-            addr.port().to_string().as_str()
-        )
+        format!("_{}_{}.json", ip.to_string().as_str(), addr.port().to_string().as_str())
     } else {
         fail!("Cannot generate config path for IP address that is not V4")
     };
@@ -120,11 +115,7 @@ pub async fn get_adnl_config(
         let config = read_to_string(config)?;
         AdnlNodeConfig::from_json(config.as_str())?
     } else {
-        let resolved_ip = if deterministic {
-            Some(resolved_ip)
-        } else {
-            None
-        };
+        let resolved_ip = if deterministic { Some(resolved_ip) } else { None };
         let (json, bin) = generate_adnl_configs(ip, tags, resolved_ip)?;
         File::create(config)?.write_all(serde_json::to_string_pretty(&json)?.as_bytes())?;
         bin
