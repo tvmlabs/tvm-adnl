@@ -11,16 +11,21 @@
 * limitations under the License.
 */
 
-use crate::common::{
-    AdnlHandshake, AdnlStream, AdnlStreamCrypto, Query, TaggedTlObject, Timeouts
-};
+use crate::common::{AdnlHandshake, AdnlStream, AdnlStreamCrypto, Query, TaggedTlObject, Timeouts};
 use rand::Rng;
-use std::{convert::TryInto, net::SocketAddr, sync::Arc, time::{Duration, SystemTime}};
-use ton_api::{deserialize_boxed, deserialize_typed, serialize_boxed,
+use std::{
+    convert::TryInto,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
+use ton_api::{
+    deserialize_boxed, deserialize_typed, serialize_boxed,
     ton::{
-        TLObject, adnl::{Message as AdnlMessage, Pong as AdnlPongBoxed},
-        rpc::adnl::Ping as AdnlPing
-    }
+        adnl::{Message as AdnlMessage, Pong as AdnlPongBoxed},
+        rpc::adnl::Ping as AdnlPing,
+        TLObject,
+    },
 };
 #[cfg(feature = "telemetry")]
 use ton_api::{BoxedSerialize, ConstructorNumber};
@@ -31,16 +36,20 @@ pub struct AdnlClientConfigJson {
     client_key: Option<KeyOptionJson>,
     server_address: String,
     server_key: KeyOptionJson,
-    timeouts: Option<Timeouts>
+    timeouts: Option<Timeouts>,
 }
 
 impl AdnlClientConfigJson {
-    pub fn with_params(server: &str, server_key: KeyOptionJson, timeouts: Option<Timeouts>) -> Self {
+    pub fn with_params(
+        server: &str,
+        server_key: KeyOptionJson,
+        timeouts: Option<Timeouts>,
+    ) -> Self {
         AdnlClientConfigJson {
             client_key: None,
             server_address: server.to_string(),
             server_key,
-            timeouts
+            timeouts,
         }
     }
 }
@@ -50,20 +59,19 @@ pub struct AdnlClientConfig {
     client_key: Option<Arc<dyn KeyOption>>,
     server_address: SocketAddr,
     server_key: Arc<dyn KeyOption>,
-    timeouts: Timeouts
+    timeouts: Timeouts,
 }
 
 impl AdnlClientConfig {
-
     /// Costructs new configuration from JSON string
     pub fn from_json(json: &str) -> Result<(Option<AdnlClientConfigJson>, Self)> {
         let json_config: AdnlClientConfigJson = serde_json::from_str(json)?;
         Self::from_json_config(json_config)
     }
-    
+
     /// Costructs new configuration from JSON data
     pub fn from_json_config(
-        json_config: AdnlClientConfigJson
+        json_config: AdnlClientConfigJson,
     ) -> Result<(Option<AdnlClientConfigJson>, Self)> {
         let server_key = Ed25519KeyOption::from_public_key_json(&json_config.server_key)?;
         let mut result_config = None;
@@ -71,14 +79,12 @@ impl AdnlClientConfig {
             Some(Ed25519KeyOption::from_private_key_json(key)?)
         } else {
             let (json, key) = Ed25519KeyOption::generate_with_json()?;
-            result_config = Some(
-                AdnlClientConfigJson {
-                    client_key: Some(json),
-                    server_address: json_config.server_address.clone(),
-                    server_key: json_config.server_key,
-                    timeouts: json_config.timeouts.clone()
-                }
-            );
+            result_config = Some(AdnlClientConfigJson {
+                client_key: Some(json),
+                server_address: json_config.server_address.clone(),
+                server_key: json_config.server_key,
+                timeouts: json_config.timeouts.clone(),
+            });
             Some(key)
         };
         let ret = AdnlClientConfig {
@@ -89,7 +95,7 @@ impl AdnlClientConfig {
                 timeouts
             } else {
                 Timeouts::default()
-            }
+            },
         };
         Ok((result_config, ret))
     }
@@ -98,61 +104,48 @@ impl AdnlClientConfig {
     pub fn timeouts(&self) -> &Timeouts {
         &self.timeouts
     }
-
 }
 
 /// ADNL client
-pub struct AdnlClient{
+pub struct AdnlClient {
     crypto: AdnlStreamCrypto,
-    stream: AdnlStream
+    stream: AdnlStream,
 }
 
 impl AdnlClient {
-
     /// Connect to server
     pub async fn connect(config: &AdnlClientConfig) -> Result<Self> {
-
         let socket = socket2::Socket::new(
-            socket2::Domain::ipv4(), 
-            socket2::Type::stream(), 
-            Some(socket2::Protocol::tcp())
+            socket2::Domain::ipv4(),
+            socket2::Type::stream(),
+            Some(socket2::Protocol::tcp()),
         )?;
         socket.set_reuse_address(true)?;
         socket.set_linger(Some(Duration::from_secs(0)))?;
         //socket.bind(&"0.0.0.0:0".parse::<SocketAddr>()?.into())?;
-        socket.connect_timeout(
-            &config.server_address.into(), 
-            config.timeouts.write()
-        )?;
+        socket.connect_timeout(&config.server_address.into(), config.timeouts.write())?;
 
         let mut stream = AdnlStream::from_stream_with_timeouts(
             tokio::net::TcpStream::from_std(socket.into_tcp_stream())?,
-            config.timeouts()
+            config.timeouts(),
         );
-        Ok(
-            Self { 
-                crypto: Self::send_init_packet(&mut stream, config).await?, 
-                stream
-            }
-        )
-
+        Ok(Self {
+            crypto: Self::send_init_packet(&mut stream, config).await?,
+            stream,
+        })
     }
 
     /// Ping server
     pub async fn ping(&mut self) -> Result<u64> {
         let now = SystemTime::now();
         let value = rand::thread_rng().gen();
-        let query = TLObject::new(
-            AdnlPing { 
-                value 
-            }
-        );
+        let query = TLObject::new(AdnlPing { value });
         #[cfg(feature = "telemetry")]
         let (ConstructorNumber(tag), _) = query.serialize_boxed();
         let query = TaggedTlObject {
             object: query,
             #[cfg(feature = "telemetry")]
-            tag
+            tag,
         };
         let answer: AdnlPongBoxed = Query::parse(self.query(&query).await?, &query.object)?;
         if answer.value() != &value {
@@ -179,19 +172,24 @@ impl AdnlClient {
             }
         }
         match deserialize_typed(buf)? {
-            AdnlMessage::Adnl_Message_Answer(answer) => 
+            AdnlMessage::Adnl_Message_Answer(answer) => {
                 if &query_id == answer.query_id.as_slice() {
                     deserialize_boxed(&answer.answer)
                 } else {
                     fail!("Query ID mismatch {:?} vs {:?}", query.object, answer)
-                },
-            answer => fail!("Unexpected answer to query {:?}: {:?}", query.object, answer)
-        } 
+                }
+            }
+            answer => fail!(
+                "Unexpected answer to query {:?}: {:?}",
+                query.object,
+                answer
+            ),
+        }
     }
 
     async fn send_init_packet(
-        stream: &mut AdnlStream, 
-        config: &AdnlClientConfig
+        stream: &mut AdnlStream,
+        config: &AdnlClientConfig,
     ) -> Result<AdnlStreamCrypto> {
         let mut buf = vec![0u8; 160];
         rand::thread_rng().fill(buf.as_mut_slice());
@@ -201,14 +199,13 @@ impl AdnlClient {
             AdnlHandshake::build_packet(&mut buf, client_key, &config.server_key, None)?
         } else {
             AdnlHandshake::build_packet(
-                &mut buf, 
+                &mut buf,
                 &Ed25519KeyOption::generate()?,
                 &config.server_key,
-                None
+                None,
             )?
         }
         stream.write(&mut buf).await?;
         Ok(ret)
     }
-
 }

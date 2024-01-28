@@ -11,35 +11,38 @@
 * limitations under the License.
 */
 
-use std::{sync::{Arc, atomic::{AtomicU64, Ordering}}, time::Instant};
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
 const TARGET_TELEMETRY: &str = "telemetry";
 
 fn try_update(atomic: &AtomicU64, prev: u64, next: u64) -> bool {
-    atomic.compare_exchange(prev, next, Ordering::Relaxed, Ordering::Relaxed).is_ok()
+    atomic
+        .compare_exchange(prev, next, Ordering::Relaxed, Ordering::Relaxed)
+        .is_ok()
 }
 
 #[derive(Default)]
 struct AveragePerSecond {
     count: AtomicU64,
     stamp: AtomicU64,
-    value: AtomicU64
+    value: AtomicU64,
 }
 
 struct AveragePerPeriod {
     history: Vec<AveragePerSecond>,
     index: AtomicU64,
-    start: Instant 
+    start: Instant,
 }
 
 impl AveragePerPeriod {
-
     fn with_period(period_secs: u64) -> Self {
-        let period_secs = if period_secs < 1 {
-            2
-        } else {
-            period_secs + 1
-        };
+        let period_secs = if period_secs < 1 { 2 } else { period_secs + 1 };
         let mut history = Vec::new();
         for _ in 0..period_secs {
             history.push(AveragePerSecond::default())
@@ -47,7 +50,7 @@ impl AveragePerPeriod {
         Self {
             history,
             index: AtomicU64::new(0),
-            start: Instant::now()
+            start: Instant::now(),
         }
     }
 
@@ -64,22 +67,22 @@ impl AveragePerPeriod {
                 // Exclude races in index
                 if (stamp - elapsed > 1) || (offset != 0) {
                     log::error!(
-                        target: TARGET_TELEMETRY, 
+                        target: TARGET_TELEMETRY,
                         "Failure in telemetry average: {} vs {} in {}", elapsed, stamp, offset
                     );
-                    return 0; 
+                    return 0;
                 }
                 delta = 1;
             } else {
                 // Exclude tail second if needed
                 if elapsed - stamp >= period {
-                    break
+                    break;
                 }
                 // Consider missing second
                 if elapsed - stamp > offset - delta {
                     count += 1;
-                    continue
-                } 
+                    continue;
+                }
                 // Exclude ongoing second
                 if elapsed > stamp {
                     count += self.history[index].count.load(Ordering::Relaxed);
@@ -110,19 +113,20 @@ impl AveragePerPeriod {
                     index + 1
                 };
                 if !try_update(&self.index, index as u64, next as u64) {
-                    continue
+                    continue;
                 }
                 self.history[next].count.store(1, Ordering::Relaxed);
                 self.history[next].stamp.store(elapsed, Ordering::Relaxed);
                 self.history[next].value.store(update, Ordering::Relaxed);
             } else {
-                self.history[index].count.fetch_add(1, Ordering::Relaxed);    
-                self.history[index].value.fetch_add(update, Ordering::Relaxed);    
+                self.history[index].count.fetch_add(1, Ordering::Relaxed);
+                self.history[index]
+                    .value
+                    .fetch_add(update, Ordering::Relaxed);
             }
-            break
-        }            
+            break;
+        }
     }
-
 }
 
 /// Simple metric
@@ -132,11 +136,10 @@ pub struct Metric {
     maximum: AtomicU64,
     total_amount: Option<AtomicU64>,
     total_average: Option<(AtomicU64, AtomicU64)>,
-    name: String
+    name: String,
 }
 
 impl Metric {
-
     /// Construct without totals
     pub fn without_totals(name: &str, average_period_secs: u64) -> Arc<Self> {
         Self::construct(name, average_period_secs, false, false)
@@ -174,12 +177,16 @@ impl Metric {
 
     /// Get total amount value
     pub fn total_amount(&self) -> Option<u64> {
-        self.total_amount.as_ref().map(|total| total.load(Ordering::Relaxed))
+        self.total_amount
+            .as_ref()
+            .map(|total| total.load(Ordering::Relaxed))
     }
 
     /// Get total average value
     pub fn total_average(&self) -> Option<u64> {
-        self.total_average.as_ref().map(|(_, average)| average.load(Ordering::Relaxed))
+        self.total_average
+            .as_ref()
+            .map(|(_, average)| average.load(Ordering::Relaxed))
     }
 
     /// Get metric name
@@ -196,16 +203,15 @@ impl Metric {
             let maximum = self.maximum.load(Ordering::Relaxed);
             #[allow(clippy::collapsible_if)]
             if maximum < update {
-                if self.maximum.compare_exchange(
-                    maximum, 
-                    update,  
-                    Ordering::Relaxed, 
-                    Ordering::Relaxed
-                ).is_err() {
-                    continue
+                if self
+                    .maximum
+                    .compare_exchange(maximum, update, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_err()
+                {
+                    continue;
                 }
             }
-            break
+            break;
         }
         // Store current
         self.current.store(update, Ordering::Relaxed);
@@ -214,27 +220,29 @@ impl Metric {
             loop {
                 let counter_val = counter.load(Ordering::Relaxed);
                 let average_val = average.load(Ordering::Relaxed);
-                let update = ((update as i128 - average_val as i128) / 
-                    (counter_val as i128 + 1)) as u64;
+                let update =
+                    ((update as i128 - average_val as i128) / (counter_val as i128 + 1)) as u64;
                 if !try_update(counter, counter_val, counter_val + 1) {
-                    continue
+                    continue;
                 }
                 if !try_update(average, average_val, average_val + update) {
                     counter.fetch_sub(1, Ordering::Relaxed);
-                    continue
+                    continue;
                 }
-                break
+                break;
             }
         }
         // Store total amount
-        self.total_amount.as_ref().map(|amount| amount.fetch_add(update, Ordering::Relaxed));
+        self.total_amount
+            .as_ref()
+            .map(|amount| amount.fetch_add(update, Ordering::Relaxed));
     }
 
     fn construct(
-        name: &str, 
+        name: &str,
         average_period_secs: u64,
         with_total_amount: bool,
-        with_total_average: bool
+        with_total_average: bool,
     ) -> Arc<Self> {
         let ret = Self {
             average: AveragePerPeriod::with_period(average_period_secs),
@@ -250,34 +258,28 @@ impl Metric {
             } else {
                 None
             },
-            name: format!("{}:", name)
+            name: format!("{}:", name),
         };
         Arc::new(ret)
     }
-
 }
 
 /// Metric measured per period
 pub struct MetricBuilder {
     last: AtomicU64,
     metric: Arc<Metric>,
-    period_nanos: u64, 
-    value: AtomicU64
+    period_nanos: u64,
+    value: AtomicU64,
 }
 
 impl MetricBuilder {
-
     /// Constructor
     pub fn with_metric_and_period(metric: Arc<Metric>, period_nanos: u64) -> Arc<Self> {
         let ret = Self {
             last: AtomicU64::new(0),
             metric,
-            period_nanos: if period_nanos < 1 {
-                1
-            } else {
-                period_nanos
-            },
-            value: AtomicU64::new(0)
+            period_nanos: if period_nanos < 1 { 1 } else { period_nanos },
+            value: AtomicU64::new(0),
         };
         Arc::new(ret)
     }
@@ -288,60 +290,58 @@ impl MetricBuilder {
         &self.metric
     }
 
-    /// Update value 
+    /// Update value
     pub fn update(&self, update: u64) {
         loop {
             let elapsed = self.metric.average.start.elapsed().as_nanos();
             let elapsed = (elapsed / self.period_nanos as u128) as u64;
             let last = self.last.load(Ordering::Relaxed);
             if elapsed > last {
-                if self.last.compare_exchange(
-                    last, 
-                    elapsed,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed
-                ).is_err() {
-                    continue
+                if self
+                    .last
+                    .compare_exchange(last, elapsed, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_err()
+                {
+                    continue;
                 }
                 for _ in last..elapsed - 1 {
                     self.metric.update(0);
                 }
-                self.metric.update(self.value.swap(update, Ordering::Relaxed));
+                self.metric
+                    .update(self.value.swap(update, Ordering::Relaxed));
             } else {
                 self.value.fetch_add(update, Ordering::Relaxed);
-            } 
-            break          
+            }
+            break;
         }
     }
-
 }
 
 pub enum TelemetryItem {
     Metric(Arc<Metric>),
-    MetricBuilder(Arc<MetricBuilder>)
+    MetricBuilder(Arc<MetricBuilder>),
 }
 
 impl TelemetryItem {
     fn get_metric_name(&self) -> &String {
         match self {
             TelemetryItem::Metric(x) => &x.name,
-            TelemetryItem::MetricBuilder(x) => &x.metric.name
+            TelemetryItem::MetricBuilder(x) => &x.metric.name,
         }
     }
 }
-    
+
 pub struct TelemetryPrinter {
     last: AtomicU64,
     metrics_dynamic: lockfree::queue::Queue<TelemetryItem>,
     metrics_dynamic_active: lockfree::set::Set<String>,
     metrics_dynamic_dropped: lockfree::set::Set<String>,
     metrics_static: Vec<TelemetryItem>,
-    period_seconds: u64, 
-    start: Instant
+    period_seconds: u64,
+    start: Instant,
 }
 
 impl TelemetryPrinter {
-
     /// Constructor
     pub fn with_params(period_seconds: u64, metrics: Vec<TelemetryItem>) -> Self {
         let incin = lockfree::set::SharedIncin::new();
@@ -350,14 +350,14 @@ impl TelemetryPrinter {
             metrics_dynamic: lockfree::queue::Queue::new(),
             metrics_dynamic_active: lockfree::set::Set::with_incin(incin.clone()),
             metrics_dynamic_dropped: lockfree::set::Set::with_incin(incin),
-            metrics_static: metrics, 
-            period_seconds,                           
-            start: Instant::now()
+            metrics_static: metrics,
+            period_seconds,
+            start: Instant::now(),
         }
     }
 
-    /// Add dynamic metric 
-    pub fn add_metric(&self, metric: TelemetryItem) {                   
+    /// Add dynamic metric
+    pub fn add_metric(&self, metric: TelemetryItem) {
         let name = metric.get_metric_name();
         let added = if let Some(item) = self.metrics_dynamic_dropped.remove(name) {
             self.metrics_dynamic_active.reinsert(item).is_ok()
@@ -369,7 +369,7 @@ impl TelemetryPrinter {
         }
     }
 
-    /// Delete dynamic metric 
+    /// Delete dynamic metric
     pub fn delete_metric(&self, name: &String) {
         if let Some(item) = self.metrics_dynamic_active.remove(name) {
             self.metrics_dynamic_dropped.reinsert(item).ok();
@@ -381,9 +381,10 @@ impl TelemetryPrinter {
     /// Print if needed
     pub fn try_print(&self) {
         let elapsed = self.start.elapsed().as_secs();
-        if elapsed > self.last.load(Ordering::Relaxed) { 
+        if elapsed > self.last.load(Ordering::Relaxed) {
             let mut out = format!(
-                "\n{:^39} {:^37}\n{:-<77}\n", "Metric", "Cur/Avg/Max/Total", ""
+                "\n{:^39} {:^37}\n{:-<77}\n",
+                "Metric", "Cur/Avg/Max/Total", ""
             );
             for metric in self.metrics_static.iter() {
                 Self::print_metric(&mut out, metric)
@@ -394,7 +395,7 @@ impl TelemetryPrinter {
                 let name = metric.get_metric_name();
                 if self.metrics_dynamic_dropped.contains(name) {
                     dropped.push(name.clone());
-                    continue
+                    continue;
                 }
                 Self::print_metric(&mut out, &metric);
                 printed.push(metric);
@@ -403,7 +404,8 @@ impl TelemetryPrinter {
             for name in dropped.iter() {
                 self.metrics_dynamic_dropped.remove(name);
             }
-            self.last.store(elapsed + self.period_seconds, Ordering::Relaxed);
+            self.last
+                .store(elapsed + self.period_seconds, Ordering::Relaxed);
             log::info!(target: TARGET_TELEMETRY, "{}", out);
         }
     }
@@ -411,7 +413,7 @@ impl TelemetryPrinter {
     fn print_metric(out: &mut String, metric: &TelemetryItem) {
         let metric = match metric {
             TelemetryItem::Metric(metric) => metric,
-            TelemetryItem::MetricBuilder(builder) => builder.metric()
+            TelemetryItem::MetricBuilder(builder) => builder.metric(),
         };
         let update = if let Some(amount) = metric.total_amount() {
             format!(
@@ -433,5 +435,4 @@ impl TelemetryPrinter {
         };
         out.push_str(update.as_str());
     }
-
 }
