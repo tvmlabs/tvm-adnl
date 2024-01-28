@@ -1,9 +1,8 @@
 [package]
-build = './common/build/build.rs'
 description = 'ADNL library'
 edition = '2021'
 name = 'adnl'
-version = '0.9.20'
+version = '0.10.0'
 
 [dependencies]
 aes-ctr = '0.6.0'
@@ -20,12 +19,12 @@ stream-cancel = '0.8.0'
 tokio-io-timeout = '1.1.1'
 chrono = { optional = true, version = '0.4' }
 external-ip = { optional = true, version = '4.1.0' }
-lockfree = { git = 'https://github.com/tonlabs/lockfree.git' }
+lockfree = { git = 'https://github.com/tvmlabs/lockfree' }
 serde = { features = [ 'derive', 'rc' ], version = '1.0.105' }
 tokio = { features = [ 'io-util', 'macros', 'net', 'rt-multi-thread' ], version = '1.5.0' }
 tokio-stream = { features = [ 'net' ], version = '0.1.4' }
-ton_api = { git = 'https://github.com/tonlabs/ever-tl.git', package = 'ton_api', tag = '0.3.57' }
-ton_types = { git = 'https://github.com/tonlabs/ever-types.git', tag = '2.0.31' }
+tvm_types = { git = 'https://github.com/tvmlabs/tvm-types', tag = '2.0.31' }
+tvm_api = { git = 'https://github.com/tvmlabs/tvm-tl', package = 'tvm_api', tag = '0.3.55' }
 zstd = { features = [ 'pkg-config' ], version = '0.11' }
 
 [features]
@@ -37,4 +36,3 @@ node = [ 'external-ip' ]
 server = [  ]
 static_workers = [  ]
 telemetry = [  ]
-

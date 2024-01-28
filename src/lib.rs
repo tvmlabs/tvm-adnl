@@ -11,13 +11,15 @@
 * limitations under the License.
 */
 
-pub mod common;
 #[cfg(feature = "client")]
 pub mod client;
-#[cfg(feature = "server")]
-pub mod server;
+pub mod common;
 #[cfg(feature = "node")]
 pub mod node;
+#[cfg(feature = "server")]
+pub mod server;
 pub mod telemetry;
 
-include!("../common/src/info.rs");
+pub fn build_commit() -> Option<&'static str> {
+    std::option_env!("BUILD_GIT_COMMIT")
+}
