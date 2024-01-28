@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-#[cfg(any(feature = "telemetry"))]
+#[cfg(feature = "telemetry")]
 use tvm_api::ConstructorNumber;
 use tvm_api::{
     deserialize_boxed_bundle, serialize_boxed, serialize_boxed_append,
@@ -926,10 +926,7 @@ impl<T> Wait<T> {
     }
 
     pub fn respond(&self, val: Option<T>) {
-        match self.queue_sender.send(val) {
-            Ok(()) => (),
-            Err(tokio::sync::mpsc::error::SendError(_)) => (),
-        }
+        let _ = self.queue_sender.send(val);
     }
 
     pub async fn wait(
