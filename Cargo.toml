@@ -6,12 +6,12 @@ rust-version = "1.75.0"
 version = "0.10.0"
 
 [dependencies]
+anyhow = "1.0.79"
 aes-ctr = "0.6.0"
 async-trait = "0.1.22"
 chrono = { optional = true, version = "0.4" }
 enum-as-inner = "=0.5.1"
 external-ip = "4.2.0"
-failure = "0.1.6"
 futures = "0.3.1"
 lockfree = { git = "https://github.com/tvmlabs/lockfree" }
 log = "0.4"
@@ -24,8 +24,8 @@ stream-cancel = "0.8.0"
 tokio = { features = ["io-util", "macros", "net", "rt-multi-thread"], version = "1.5.0" }
 tokio-io-timeout = "1.1.1"
 tokio-stream = { features = ["net"], version = "0.1.4" }
-tvm_api = { git = "https://github.com/tvmlabs/tvm-tl", package = "tvm_api", tag = "0.3.55" }
-tvm_types = { git = "https://github.com/tvmlabs/tvm-types", tag = "2.0.31" }
+tvm_api = { git = "https://github.com/tvmlabs/tvm-tl", package = "tvm_api", tag = "0.4.0" }
+tvm_types = { git = "https://github.com/tvmlabs/tvm-types", tag = "3.0.1" }
 zstd = { features = ["pkg-config"], version = "0.11" }
 
 [features]
