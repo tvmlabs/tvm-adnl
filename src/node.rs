@@ -2320,7 +2320,7 @@ impl AdnlNode {
 
     pub fn check(&self) {
         //        if self.queue_send_packets.count.
-        // load(atomic::Ordering::Relaxed) != 0 {            
+        // load(atomic::Ordering::Relaxed) != 0 {
         // panic!("Fuckup with queue")        }
     }
 
@@ -2347,7 +2347,7 @@ impl AdnlNode {
         let socket_send = socket_recv.try_clone()?;
         //        let socket_send =
         // Arc::new(tokio::net::UdpSocket::from_std(socket.into())?);        let
-        // socket_send = tokio::net::UdpSocket::bind(            
+        // socket_send = tokio::net::UdpSocket::bind(
         // &SocketAddr::new(                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         //                node.config.ip_address.port()
         //            )
